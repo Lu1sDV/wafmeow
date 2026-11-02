@@ -191,7 +191,10 @@ func compactChannelLimitations(result wafmeow.Result) string {
 		if availability == nil {
 			continue
 		}
-		for _, channel := range []struct{ name string; state wafmeow.ChannelState }{
+		for _, channel := range []struct {
+			name  string
+			state wafmeow.ChannelState
+		}{
 			{"status", availability.Status},
 			{"headers", availability.Headers},
 			{"reason", availability.Reason},
