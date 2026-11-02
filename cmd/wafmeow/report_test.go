@@ -89,8 +89,8 @@ func TestHumanReportColorsOnlyMatchedProductNames(t *testing.T) {
 		}
 	}
 	if strings.Contains(text, fmt.Sprint(colored.Red("WAF MATCH"))) ||
-		!strings.Contains(text, " | incomplete | "+result.Target) {
-		t.Fatalf("human table colored outcome, URL or metadata: %q", text)
+		!strings.Contains(text, fmt.Sprint(colored.Bold(result.Target))+" | WAF MATCH | ") || !strings.Contains(text, " | incomplete\n") {
+		t.Fatalf("human table lost bold target or colored the status: %q", text)
 	}
 
 	// Redirected stderr or --no-colors produces the exact same report text
@@ -135,7 +135,7 @@ func TestHumanReportPreservesFullEscapedURLAndSupportingObservations(t *testing.
 	if err := report.replay(context.Background(), &output, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"PARTIAL URL / RESULT / EVIDENCE", "SUPPORTING OBSERVATIONS", "WAF MATCH | First\\tWAF (observations #1,#3); Second WAF (observations #2) | incomplete | " + terminalText(target)} {
+	for _, want := range []string{"PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE", "SUPPORTING OBSERVATIONS", " + terminalText(target) + " | WAF MATCH | First\\tWAF (observations #1,#3); Second WAF (observations #2) | incomplete"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("missing full escaped row %q", want)
 		}
