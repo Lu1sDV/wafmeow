@@ -319,7 +319,7 @@ func humanTruncationPhrase(count int) string {
 // Wrap only explanatory prose, not arbitrary URL query values. Keep the label
 // fixed and align continuation lines for narrow terminal readability.
 func humanWrapRow(out *strings.Builder, label, content string) {
-	const width = 92
+	const width = 76
 	prefix := "  " + label + "  "
 	indent := strings.Repeat(" ", uniseg.StringWidth(prefix))
 	line := prefix
