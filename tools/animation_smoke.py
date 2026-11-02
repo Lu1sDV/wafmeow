@@ -333,7 +333,9 @@ def run_suite(binary, output):
             position = out.index(first.encode())
             require(not motion(out[position:]), 'animation redrew after the first result')
             if shared:
-                require(out.index(b'wafmeow') < out.index(b'RUN PLAN') < out.index(b'\x1b['),
+                first_redraw = re.search(rb'\x1b\[\d+A', out)
+                require(first_redraw is not None and
+                        out.index(b'wafmeow') < out.index(b'RUN PLAN') < first_redraw.start(),
                         'logo must precede the boxed plan and first redraw')
                 require(re.search(rb'\x1b\[\d+B', out), 'shared redraw did not restore cursor below the boxed plan')
             terminal_cleanup(process)
