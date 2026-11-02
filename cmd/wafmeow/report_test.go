@@ -135,7 +135,7 @@ func TestHumanReportPreservesFullEscapedURLAndSupportingObservations(t *testing.
 	if err := report.replay(context.Background(), &output, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE", "SUPPORTING OBSERVATIONS", " + terminalText(target) + " | WAF MATCH | First\\tWAF (observations #1,#3); Second WAF (observations #2) | incomplete"} {
+	for _, want := range []string{"PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE", "SUPPORTING OBSERVATIONS", terminalText(target) + " | WAF MATCH | First\\tWAF (observations #1,#3); Second WAF (observations #2) | incomplete"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("missing full escaped row %q", want)
 		}
