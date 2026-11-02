@@ -86,7 +86,7 @@ func TestSignalCapturedHTTPDiagnosticCannotBecomeBrowserFailure(t *testing.T) {
 				if code := runContext(context.Background(), args, strings.NewReader(input), true, &stdout, &stderr); code != 0 {
 					t.Fatalf("capture run failed: code=%d stderr=%q", code, stderr.String())
 				}
-				for _, want := range []string{"[ REVIEW ]", "HTTP diagnostics were recorded", "1 HTTP checks recorded"} {
+				for _, want := range []string{"[ REVIEW ]", "HTTP diagnostics were recorded", "1 HTTP check recorded"} {
 					if !strings.Contains(stdout.String(), want) {
 						t.Fatalf("HTTP diagnostic lost %q: %q", want, stdout.String())
 					}
