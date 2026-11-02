@@ -255,7 +255,7 @@ for value in ['"Accept: text/plain, application/json"', '"X-Tag: say ""hello"""'
 for value in ['NoColon', '', 'X-Tag: first\nSecond: injected', '"X-Tag: unclosed']:
     case('invalid header '+repr(value), ['--target=invalid://one', '-H', value], expected=1)
 
-for filename in ['"report.json', 'report.json"', '"report.json"', 'a\\b.json', '--report.json', '-']:
+for filename in ['"report.json', 'report.json"', '"report.json"', 'a\\b.json', '--report.json', './-']:
     for form in [['-O', filename], ['-O='+filename], ['-O'+filename]]:
         # A leading-dash path must use an attached/equals value, or ./ prefix.
         if form == ['-O', filename] and filename.startswith('--'):
@@ -281,7 +281,7 @@ help_checks = {
     'groups': all(word+':' in help_text for word in ['Input', 'Scan modes', 'Output', 'HTTP requests', 'Rate and concurrency', 'Evidence limits', 'Offline import and matching', 'Diagnostics and journals', 'Browser', 'Information']),
     'canonical_and_alias': '--target-file=FILE' in help_text and '--input=FILE' in help_text,
     'short_flags': all('-'+flag+',' in help_text for flag in ['t', 'I', 'O', 'H', 'c']),
-    'machine_output_boundary': '--jsonl' in help_text and '- is a literal file' in help_normalized,
+    'machine_output_boundary': '--jsonl' in help_text and '--output - is not stdout' in help_normalized and '--output ./-' in help_normalized,
     'default_timeout': '(default: 5s)' in help_text,
     'default_concurrency': '(default: 20)' in help_text,
     'explicit_stdin': 'piped stdin supplies target URLs' in help_normalized,
