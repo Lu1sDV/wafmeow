@@ -41,7 +41,11 @@ func runPlanText(opts options, config wafmeow.Config) string {
 		} else if config.FastMode {
 			mode, checks, fanout = "FAST", 3, min(3, connections)
 		}
-		heading = fmt.Sprintf("%s MODE | %d planned HTTP checks | %d target workers", mode, checks, config.Concurrency)
+		checkUnit := "checks"
+		if checks == 1 {
+			checkUnit = "check"
+		}
+		heading = fmt.Sprintf("%s MODE | %d planned HTTP %s | %d target workers", mode, checks, checkUnit, config.Concurrency)
 		limits = fmt.Sprintf("Parallel checks: up to %d/target | Timeouts: %s/request, %s/target",
 			fanout, config.RequestTimeout, config.TargetTimeout)
 		if connections != config.Concurrency || (config.MaxConnections != 0 && config.MaxConnections != defaults.MaxConnections) {
