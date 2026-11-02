@@ -65,7 +65,7 @@ func TestRunPlanIsRoundedBoundedAndFollowedByBlankLine(t *testing.T) {
 			t.Fatalf("box row width=%d, want 72: %q", width, line)
 		}
 	}
-	for _, redundant := range []string{"unlimited", "strict off", "output: human", "5s/req"} {
+	for _, redundant := range []string{"unlimited", "strict off", "output: human", "5s/target"} {
 		if strings.Contains(plan, redundant) {
 			t.Errorf("default plan contains ambiguous or redundant detail %q: %s", redundant, plan)
 		}
@@ -83,7 +83,7 @@ func TestCustomizedRunPlanWrapsWithoutLeakingValues(t *testing.T) {
 	plan := runPlanText(opts, config)
 	for _, want := range []string{"1 in flight", "4 attempts/target", "redirects off", "origin allowlist on",
 		"5 requests/s global", "2 requests/s per origin", "JSONL report", "strict"} {
-		if !strings.Contains(plan, want) {
+		if !strings.Contains(strings.Join(strings.Fields(plan), " "), want) {
 			t.Errorf("missing override %q: %s", want, plan)
 		}
 	}
