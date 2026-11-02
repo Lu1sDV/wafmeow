@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -391,8 +392,8 @@ func TestScanBannerKeepsPlanBelowAnimatedLogo(t *testing.T) {
 		opts := newOptions(wafmeow.DefaultConfig())
 		plan := runPlanText(opts, wafmeow.DefaultConfig())
 		footerRows := scanBannerPlanRows(terminal, writer, writer, plan)
-		if footerRows != 1 {
-			t.Fatalf("single shared run-plan line should offset redraw by 1: %d", footerRows)
+		if footerRows != strings.Count(plan, "\n") {
+			t.Fatalf("shared run-plan box must offset redraw by its rows: %d", footerRows)
 		}
 		animation, err := startScanBannerWithPlan(context.Background(), writer, opts,
 			aurora.New(aurora.WithColors(false)), terminal, func() { t.Error("unexpected abort") },
@@ -408,7 +409,8 @@ func TestScanBannerKeepsPlanBelowAnimatedLogo(t *testing.T) {
 		time.Sleep(logoInterval)
 		synctest.Wait()
 		redraw, _ := writer.snapshot()
-		if !strings.Contains(redraw, "\x1b[14A") || !strings.Contains(redraw, "\x1b[1B") {
+		if !strings.Contains(redraw, fmt.Sprintf("\x1b[%dA", logoRows+footerRows)) ||
+			!strings.Contains(redraw, fmt.Sprintf("\x1b[%dB", footerRows)) {
 			t.Fatalf("redraw did not preserve the plan's cursor rows: %q", redraw)
 		}
 		if err := animation.stop(); err != nil {
@@ -430,7 +432,7 @@ func TestBannerPlanLayoutDisablesUnsafeRedraw(t *testing.T) {
 	plan := runPlanText(opts, config)
 	terminal := animationTerminal()
 	var stdout, stderr bytes.Buffer
-	if rows := scanBannerPlanRows(terminal, &stdout, &stderr, plan); rows != 1 {
+	if rows := scanBannerPlanRows(terminal, &stdout, &stderr, plan); rows != strings.Count(plan, "\n") {
 		t.Fatalf("injected shared terminal missed plan rows: %d", rows)
 	}
 	terminal.sharedOutput = false
@@ -484,7 +486,7 @@ func TestCLIBannerStopsBeforeSharedConsoleResultsAndDiagnostics(t *testing.T) {
 					t.Fatalf("result waited for animation: exit=%d elapsed=%v output=%q", code, time.Since(started), text)
 				}
 				first := strings.Index(text, "DEBUG")
-				if first < 0 || !strings.Contains(text[:first], "\x1b[15A") || strings.Contains(text[first:], "\x1b[15A") || !strings.Contains(text, "SUMMARY") {
+				if first < 0 || !strings.Contains(text[:first], "A\r\x1b[2K") || strings.Contains(text[first:], "A\r\x1b[2K") || !strings.Contains(text, "SUMMARY") {
 					t.Fatalf("shared terminal redraw interleaved with diagnostics/results: %q", text)
 				}
 				if logo, plan := strings.Index(text, "wafmeow"), strings.Index(text, "RUN PLAN"); logo < 0 || plan <= logo {
@@ -525,12 +527,12 @@ func TestCLIBannerEarlyEndAndModeExclusions(t *testing.T) {
 				started := time.Now()
 				code := runContextWithTerminal(context.Background(), args, strings.NewReader(test.input), true, writer, writer, animationTerminal())
 				text, _ := writer.snapshot()
-				redraw := strings.Contains(text, "\x1b[14A") || strings.Contains(text, "\x1b[15A")
+				redraw := strings.Contains(text, "A\r\x1b[2K")
 				if code != test.code || time.Since(started) >= logoInterval || redraw != test.animated {
 					t.Fatalf("early end/exclusion: code=%d elapsed=%v text=%q", code, time.Since(started), text)
 				}
 				for _, marker := range []string{"PARTIAL SUMMARY", "SUMMARY", "ERROR render", "ERROR open"} {
-					if at := strings.Index(text, marker); at >= 0 && strings.Contains(text[at:], "\x1b[13A") {
+					if at := strings.Index(text, marker); at >= 0 && strings.Contains(text[at:], "A\r\x1b[2K") {
 						t.Fatalf("redraw after %s: %q", marker, text)
 					}
 				}

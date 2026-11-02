@@ -243,7 +243,7 @@ def human_result(process, target):
     text = plain(process.streams['stdout'])
     # A shared stdout/stderr terminal also prints the target in the final
     # human summary. Count the result row, not every mention of the URL.
-    row = '[ NO WAF MATCH ]  ' + target
+    row = target + '  [ NO WAF MATCH ]'
     require(text.count(row) == 1, f'human result for {target} was missing or duplicated')
 
 
@@ -333,9 +333,11 @@ def run_suite(binary, output):
             position = out.index(first.encode())
             require(not motion(out[position:]), 'animation redrew after the first result')
             if shared:
-                require(out.index(b'wafmeow') < out.index(b'RUN PLAN') < out.index(b'\x1b[15A'),
-                        'logo must precede the two-line plan and first redraw')
-                require(b'\x1b[2B' in out, 'shared redraw did not restore cursor below the plan')
+                first_redraw = re.search(rb'\x1b\[\d+A', out)
+                require(first_redraw is not None and
+                        out.index(b'wafmeow') < out.index(b'RUN PLAN') < first_redraw.start(),
+                        'logo must precede the boxed plan and first redraw')
+                require(re.search(rb'\x1b\[\d+B', out), 'shared redraw did not restore cursor below the boxed plan')
             terminal_cleanup(process)
             require([first_gate.calls, second_gate.calls] == [1, 1], 'animation changed baseline request accounting')
 
@@ -350,17 +352,16 @@ def run_suite(binary, output):
             gate.release.set()
             process.finish()
             out = plain(process.streams['stdout'])
-            require('[ WAF MATCH ]  ' + url in out, 'matched target missing')
-            require('  Fixture WAF\n    matched  #1 [Normal] HTTP 200' in out,
-                    'matched fingerprint not nested beneath product')
-            require('    HTTP  1 observation: 200\n' in out, 'HTTP evidence not nested')
-            require('    classification  complete (1 truncated body)' in out,
-                    'complete classification must not imply a complete response body')
-            require('    WARN  [Normal] ' in out, 'warning not grouped beneath WAF match')
-            require('WARN  ' + url not in out, 'nested warning repeats target name')
-            require('\n\nSUMMARY' in out, 'warning and summary are not separated')
-            require('   product  ' not in out and 'matched on  ' not in out,
-                    'verbose legacy product formatting resurfaced')
+            require(url + '  [ WAF MATCH ]' in out, 'matched target missing')
+            require('WAF: Fixture WAF  (Normal HTTP 200)' in out,
+                    'matched fingerprint is not attributed to its supporting check')
+            require('Checks  1 HTTP check recorded' in out, 'HTTP check count missing')
+            require('Note  1 response body was truncated' in out,
+                    'complete classification must not imply complete HTTP content')
+            require('WARN  ' + url not in out, 'human warnings repeat the target')
+            require('\n\nSUMMARY' in out, 'result and final summary are not separated')
+            require('matched  #' not in out and 'observations:' not in out,
+                    'old verbose HTTP layout resurfaced')
             raw = bytes(process.streams['stdout'])
             green_name = b'\x1b[1;32mFixture WAF\x1b[0m'
             require(raw.count(green_name) == 2,

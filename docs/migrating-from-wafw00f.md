@@ -19,7 +19,7 @@ reference is the [2.4.2 CLI source](https://github.com/EnableSecurity/wafw00f/bl
 | Test one product | `-t PRODUCT` | No product-selection flag; provide an explicitly reviewed reduced catalogue with `--fingerprints FILE` |
 | List products | `-l` / `--list` | `--list --silent --no-colors` |
 | Save results | `-o report.json` | `--output report.json` or `-O report.json`; replacement is atomic |
-| Choose file format | `-f json` | Use the output extension: `.json`, `.jsonl`, `.csv`, or `.txt`; other extensions select TXT |
+| Choose file format | `-f json` | Use `.json`, `.jsonl`/`.ndjson`, `.csv` or `.txt`; extensionless files select TXT, unknown suffixes are rejected |
 | Write structured stdout | `-o - -f json`; one JSON array after the scan | `--jsonl`; streams one result object per line, including incomplete/failed targets |
 | Add headers | `-H headers.txt` | Repeat inline `-H 'Name: value'`; values containing commas require [CSV quoting](usage.md#request-headers), not a header file |
 | Set request timeout | `-T 5` | `--request-timeout 5s`; separately set `--target-timeout 30s` |
@@ -46,9 +46,11 @@ the file flag. Direct `--target` occurrences, a target file, and `--evidence` ar
 mutually exclusive. Each direct target must be nonblank and single-line. See
 [input selection](usage.md#choose-input) for precedence and stdin examples.
 
-For output, use `--jsonl` to stream to stdout. wafmeow's `--output -` names a
-literal TXT file; it does not have wafw00f's stdout meaning. `--output` / `-O`
-selects an atomic report file and can be combined with JSONL stdout.
+For output, use `--jsonl` to stream to stdout. `--output -` is rejected with
+guidance; use `--output ./-` for a literal TXT file named `-`. `--output` / `-O`
+selects an atomic report file and can be combined with JSONL stdout. Unknown
+report suffixes now fail rather than silently creating TXT. See the
+[JSONL pipeline guide](jsonl.md) for parsing, semantics and recovery.
 
 ## Choose collection intentionally
 
@@ -69,7 +71,7 @@ A useful starting point for an authorized URL list is:
 
 ```sh
 wafmeow --target-file authorized-urls.txt --fast --jsonl --silent \
-  --output results.json --strict
+  --output results.json --strict --require-results
 ```
 
 Parse each JSONL record's `outcome.state`, `outcome.matches`, diagnostics, and
@@ -77,7 +79,8 @@ optional browser result. Keep incomplete/failed and unmatched results. Named
 matches can coexist with incomplete evidence, and generic anomalies are separate.
 `--strict` checks result quality, not whether a WAF matched. Empty input is a
 successful zero-target run; check the result count if your job requires targets.
-Configure [rates, concurrency and deadlines](usage.md#rate-and-deadline-tuning)
+`--require-results` rejects zero processed targets without replacing a previous
+report; otherwise empty input succeeds. Configure [rates, concurrency and deadlines](usage.md#rate-and-deadline-tuning)
 together when limiting traffic.
 
 | Exit | Meaning |

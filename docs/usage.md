@@ -376,22 +376,29 @@ upstream omissions are never treated as negative detections.
 | Stream machine-readable results on stdout | `--jsonl` |
 | Save a final report atomically | `--output results.json` or `-O results.json` |
 | Stream and save the same run | `--jsonl --output results.csv` |
-| Suppress human scan output | `--silent` together with `--jsonl` or `--output` |
+| Suppress routine human output | `--silent` with `--jsonl` or `--output` |
 | Treat incomplete or diagnosed results as a failing check | `--strict`; exit 2 after report publication |
+| Fail on zero processed targets | `--require-results`; exit 1 and preserve the previous named report |
 
-`--output` selects a **file**, with its case-insensitive extension choosing JSON,
-JSONL, CSV or TXT; other extensions select TXT. The old destination is replaced
-atomically when the report is published. `--output -` creates a literal TXT file
-named `-`. Use `--jsonl` for stdout. A named JSONL report is also published
-atomically; `--diagnostics-journal` provides append-and-sync recording during the
-run. See [report and journal behavior](operations.md#reports-and-durable-journals).
-Result reports are not [response captures](#offline-captures) and cannot be fed
-back to `--evidence`.
+`--jsonl` writes JSON-only stdout without needing `--silent`. The run plan and
+summary go to stderr. `--silent` hides routine human stderr messages, not fatal
+errors or explicitly requested `--debug` output.
+
+`--output` publishes a **separate final file**. Suffixes select JSON
+(`.json`), JSONL (`.jsonl` / `.ndjson`), CSV (`.csv`), or TXT (`.txt`);
+extensionless names select TXT. Unknown suffixes now fail early instead of
+silently creating TXT. `--output -` is rejected: use `--jsonl` for stdout
+or `--output ./-` for a literal file named `-`. Named reports replace
+their destination atomically after successful processing; `--diagnostics-journal`
+is an independent append/sync sink for recovery. See
+[JSONL pipeline guide](jsonl.md) for actual results, safe `jq` expressions,
+independent output streams and partial-stream semantics.
 
 `--strict` is an evidence-quality check, not a fail-on-WAF switch. A complete
 result with a named match can exit 0; an incomplete result without any match can
-exit 2. A successful zero-target run also exits 0, so automation that requires
-results must check their count separately.
+exit 2. Empty input succeeds unless `--require-results` is used. With that flag,
+zero targets exit 1 and an existing named report is preserved; a processed target
+with failed classification still counts as an occurrence.
 
 JSONL stdout contains only result objects. The run plan, human summaries and
 explicit `--debug` output use stderr. `--silent` suppresses human scan output but does not hide fatal
@@ -409,114 +416,81 @@ wafmeow --evidence assets/demo/captures.jsonl --jsonl --silent \
 
 ## Human results and final overview
 
-Interactive human scans show the cat climbing an orange brick wall **first**.
-After the first frame, stderr shows a compact `RUN PLAN`: normally one line
-with the scan mode, effective worker/parallelism counts and deadlines. Only
-non-default controls (such as a rate cap, origin allowlist, report or browser)
-add short settings lines. Offline plans state that no network requests are sent.
-The plan omits target URLs, header values, origin values and file paths, and
-`--silent` suppresses it. A custom User-Agent is noted without revealing its
-value. The run plan remains on stderr, even for human scans.
+For interactive human scans, the cat-and-brick-wall header appears first.
+A compact, rounded **RUN PLAN** box follows, then a **blank line** before any
+target result. The box clearly states the selected DEEP/FAST/BASELINE mode,
+**planned** HTTP checks, target workers, maximum parallel checks per target,
+and explicitly labeled **5s/request** and **30s/target** defaults. Redirects
+and retries can increase actual wire requests; the plan never claims an exact
+count. Optional settings wrap inside the box without including input URLs,
+origin values, header secrets, or local paths. Offline plans explicitly say
+there will be **no network requests**. The plan uses stderr even in human mode.
 
-The animation normally finishes in about 540 ms and runs alongside acquisition;
-the first result stops it immediately, without waiting for the remaining frames.
-The logo settles before any result, warning, debug line, overview or error is printed,
-including when stdout and stderr share one terminal. It never hides the cursor.
-
-The wider cat-and-brick-wall logo uses 54 columns and 13 rows, with a blank
-line after the bottom course of bricks. The `wafmeow vX.Y.Z` title and
-`WAF fingerprinting` subtitle are centered over the **wall**, not the cat.
-Long development pseudo-versions are abbreviated with an ellipsis in this
-visual header; `--version` and JSON provenance retain the complete identity.
-
-Use `--no-animation` to keep the cat still. Animation requires ANSI-capable
-interactive stdout wider than 54 columns, enough rows for the heading, art and
-any shared-terminal plan, and a stable measured terminal size. Redirected
-stdout, narrow or unknown-size terminals, and `TERM=dumb` use the compact
-static header. Piped target input can still animate when stdout is eligible. `--no-colors` or
-`NO_COLOR` gives static, escape-free output. Help, version, product listings,
-`--jsonl` and `--silent` never animate. If a terminal resize is detected between
-frames, startup redraws stop because terminal reflow invalidates their coordinates.
-
-The final frame of the four-pose animation (shown without ANSI color):
+For example (illustrative output; not a live-target assertion):
 
 ```text
-                              wafmeow v3.0.1
-                            WAF fingerprinting
+╭─ RUN PLAN ──────────────────────────────────────────────────────────╮
+│ DEEP MODE | 8 planned HTTP checks | 20 target workers              │
+│ Parallel checks: up to 1/target | Timeouts: 5s/request, 30s/target │
+╰────────────────────────────────────────────────────────────────────╯
 
-          /\_/\
-        =( o.o )=
-         / >^< \
-     ___/       ____o+-------+-------+-------+-------+
-    /   /\      /    |       |       |       |       |
-   /___/  \___/      +---+-------+-------+-------+---+
-   \  \  \      /    |   |       |       |       |   |
-    \__\  \_/\_/     +-------+-------+-------+-------+
-       \___/         |       |       |       |       |
-                     +---+-------+-------+-------+---+
-                     |   |       |       |       |   |
-                     +-------+-------+-------+-------+
+https://example.test  [ WAF MATCH ]
+  WAF: Example WAF  (Normal HTTP 403)
+  Checks  8 HTTP checks recorded
 
+https://other.example.test  [ INCOMPLETE ]
+  Checks  8 HTTP checks recorded
+  Redirect  8 checks: HTTP 302 to https://elsewhere.example.test (outside allowed scope)
+  Why incomplete  Some WAF fingerprint checks remain unresolved because
+                  8 checks stopped at redirects outside the allowed scope;
+                  destination responses were not fetched. A missing match
+                  here is not evidence that no WAF is present.
 ```
 
-A CLI run plays the movement once and may end it early when a result arrives.
+The **target comes first and is bold** on color-capable terminals; the outcome
+appears after it. Named WAF matches appear once each on concise `WAF` rows
+with supporting probe role/status, not duplicated product headings or numeric
+evidence indices. `Checks` uses a bold count of HTTP *observations*, not
+on-wire request attempts. Complete cases omit redundant “evidence complete”
+rows and raw status histograms. Unusual generic responses appear as `Review`
+and never imply probe causation.
 
-Without `--jsonl` or `--silent`, results stream in completion order as compact
-per-target blocks. A matched product is indented below its target; supporting
-observations, review signals, and HTTP completeness follow underneath it.
-The HTTP line groups status counts (for example, `200×3 / 403×4 / 404`) rather
-than printing eight separate probes in a long horizontal run. Repeated warnings
-from different probes are grouped by reason and list their contributing roles.
-When several products match, shared HTTP evidence and warnings stay at the
-target level rather than being attributed to one product. In color-capable
-human output, the `[ WAF MATCH ]` label stays **red**, while recognized
-product names are **green** both under the target and in the end-of-run
-results table; redirected output and `--no-colors` remain ANSI-free. On shared interactive
-terminals, warnings appear directly beneath the result; when stdout is redirected,
-stderr keeps standalone target-labeled diagnostics so messages remain attributable.
-The summary is separated from the last warning by a blank line.
-Saved captures retain input order. Matched observation numbers start at 1 per
-target and identify observations, not wire-request attempts or retries.
-Live probes retain their final response and redirect-chain metadata in one
-observation; followed redirects do not receive separate numbers. Detailed
-per-probe statuses and URLs remain available through `--debug` and JSONL.
-A match does not prove a probe triggered blocking. The debug and JSON evidence
-indexes remain zero-based.
+Scope-blocked redirects are grouped by **destination origin and status**:
+the normal human view does **not** print each encoded probe query or full
+payload URL. It explains that the configured redirect scope prevented
+following those URLs. Full redirect paths, payload URLs, per-probe metadata,
+diagnostic codes and zero-based evidence references remain available through
+`--jsonl` and `--debug`; the compact view never changes the result schema.
+Other HTTP diagnostics still use stderr and retain their original causes,
+including actionable TLS certificate guidance. `--no-warning` hides those
+diagnostic blocks, but not the plain-English reason for an incomplete/failed
+classification. A WAF match may coexist with incomplete checks.
 
 | Label | Meaning |
 | --- | --- |
-| `WAF MATCH` (red) | A named fingerprint matched; HTTP evidence may still be incomplete |
-| `NO WAF MATCH` (green) | Complete evaluation with no named match, unusual response signal or HTTP diagnostic—not proof of WAF absence |
-| `INCOMPLETE` (amber) | No named match and insufficient evidence for a complete evaluation |
-| `REVIEW` (amber) | Complete evaluation with an unusual response signal or HTTP diagnostic |
+| `WAF MATCH` (red) | Named fingerprint evidence matched; unrelated product checks may still be incomplete |
+| `NO WAF MATCH` (green) | Complete named classification with no unusual signal or HTTP diagnostic; not proof of absence |
+| `INCOMPLETE` (amber) | No named match and some fingerprints cannot be settled from the available evidence |
+| `REVIEW` (amber) | Complete classification but unusual response signals, HTTP diagnostics or channel issues warrant review |
 | `ERROR` (red) | Target evaluation failed |
 
-HTTP completeness is shown separately, including amber incomplete evidence on
-matched targets. Browser outcomes and artifact failures remain separate from HTTP.
-No latency, byte count or confidence is inferred from unavailable metadata.
+At scan end, stderr still receives a disjoint outcome overview and the
+full URL/result/evidence table, retaining every target and supporting-observation
+reference. A partial run labels that summary as partial. This table is not
+the machine interface; use JSONL for automation. The private disk-backed human
+report spool keeps large scans bounded in memory and is removed on normal/error
+exits.
 
-At scan end, stderr receives a disjoint outcome overview, separate HTTP/browser
-totals, and a full URL/result/evidence table including supporting observation
-numbers. URL rows retain completion order (input order for captures); no targets
-are silently omitted or abbreviated. Input/acquisition failures label the available
-tables partial. Cancellation exits 130 and may stop console output immediately;
-a report file already atomically published before final replay remains published.
-Human-mode table rows use a private temporary file, removed on normal/error exits,
-so replay does not retain the whole scan in memory. Large scans produce large
-tables; use `--jsonl` for automation rather than parsing human layout.
+Logo animation remains opt-in to terminal capability: use `--no-animation`
+for a static cat, or `--no-colors` / `NO_COLOR` for static escape-free output.
+JSONL and silent runs do not animate. Narrow/unknown terminal dimensions,
+`TERM=dumb`, redirected stdout and terminal resizing prevent unsafe redraws.
+The rounded plan reserves its actual displayed terminal rows so the animation
+does not paint over it. Help, version and product listing do not animate.
+
 On Unix, cancellation also interrupts blocked CLI pipe outputs. Windows checks
-cancellation between writes but cannot interrupt an already blocked synchronous
-output write. Library/test writers remain caller-owned.
-
-Use JSONL stdout or JSON/JSONL/CSV/TXT report files for structured output.
-`--jsonl` prints the run plan and overview to stderr, not the URL table. `--silent`
-suppresses human scan output; `--no-warning` hides diagnostic prose but preserves
-outcome and completeness. Color is disabled for redirected output, `NO_COLOR`,
-`TERM=dumb`, or `--no-colors`. Diagnostics use stderr's own terminal status for
-color, independently of stdout. On a shared terminal, repeated HTTP diagnostics
-are grouped by reason under the result with escaped role labels. Redirected
-stderr retains a standalone target-labeled warning block and separate colors.
-A blank line follows the final warning group.
+cancellation between writes, but cannot interrupt an already blocked
+synchronous output write. Library/test writers remain caller-owned.
 
 ### Certificate verification failures
 

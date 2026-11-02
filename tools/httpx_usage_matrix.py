@@ -701,17 +701,36 @@ class Matrix:
                     case.results(out, targets)
                     case.check(bool(err.strip()), "human summary remains on stderr, never JSONL stdout")
                 else:
+                    # The concise human view is target-first and deliberately
+                    # avoids a redundant "classification incomplete" line.
+                    # Retain both the plain-English uncertainty explanation and
+                    # explicit response-channel limitations, including under
+                    # --no-warning; the final stderr table retains exact states.
                     for channel, text in (("stdout", out), ("stderr", err)):
-                        case.check(all(target.encode() in text for target in targets), channel + " retains every full target")
-                        case.check(b"classification" in text.lower() and b"unknown" in text.lower(), channel + " distinguishes classification and unavailable body")
-                        case.check(b"Header fixture" in text, channel + " retains named positive despite incompleteness")
-                    table_targets = [
-                        line.rsplit(b"|", 1)[-1].strip().decode()
-                        for line in err.splitlines()
-                        if b"|" in line and line.rsplit(b"|", 1)[-1].strip().decode() in targets
+                        case.check(all(target.encode() in text for target in targets),
+                                   channel + " retains every full target")
+                        case.check(b"Header fixture" in text,
+                                   channel + " retains named positive despite incompleteness")
+                    case.check(b"Why incomplete" in out and b"body unknown" in out,
+                               "stdout explains unresolved fingerprints and unknown body")
+                    case.check(b"classification incomplete" in err.lower() and b"body unknown" in err,
+                               "stderr table preserves exact classification state and channel availability")
+                    result_targets = [
+                        line.split(b"  [", 1)[0].decode()
+                        for line in out.splitlines()
+                        if b"  [" in line and line.split(b"  [", 1)[0].decode() in targets
                     ]
-                    case.equal(table_targets, targets, "stderr final table preserves full URLs, order and duplicate occurrences")
-                    case.check(b"Cookie fixture" in err, "stderr final table retains positive product names")
+                    case.equal(result_targets, targets,
+                               "stdout target-first rows preserve full URLs, order and duplicate occurrences")
+                    table_targets = [
+                        line.split(b" | ", 1)[0].decode()
+                        for line in err.splitlines()
+                        if b" | " in line and line.split(b" | ", 1)[0].decode() in targets
+                    ]
+                    case.equal(table_targets, targets,
+                               "stderr target-first table preserves full URLs, order and duplicate occurrences")
+                    case.check(b"Cookie fixture" in err,
+                               "stderr final table retains positive product names")
                     if mode == "human-no-warning":
                         case.check(not any(line.lstrip().startswith(b"WARN ") for line in (out + err).splitlines()), "no-warning suppresses warning records, not uncertainty")
             self.case("output-" + mode, exercise)

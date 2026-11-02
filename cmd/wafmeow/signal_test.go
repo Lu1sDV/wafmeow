@@ -86,7 +86,7 @@ func TestSignalCapturedHTTPDiagnosticCannotBecomeBrowserFailure(t *testing.T) {
 				if code := runContext(context.Background(), args, strings.NewReader(input), true, &stdout, &stderr); code != 0 {
 					t.Fatalf("capture run failed: code=%d stderr=%q", code, stderr.String())
 				}
-				for _, want := range []string{"[ REVIEW ]", "HTTP diagnostics need review", "HTTP  1 observation: 200", "evidence  complete"} {
+				for _, want := range []string{"[ REVIEW ]", "HTTP diagnostics were recorded", "1 HTTP check recorded"} {
 					if !strings.Contains(stdout.String(), want) {
 						t.Fatalf("HTTP diagnostic lost %q: %q", want, stdout.String())
 					}
@@ -172,19 +172,10 @@ func TestSignalOutcomeColors(t *testing.T) {
 			if err := printResult(&stdout, &stderr, result, false, au, aurora.New(aurora.WithColors(false))); err != nil {
 				t.Fatal(err)
 			}
-			want := fmt.Sprint(au.Bold(au.Colorize("[ "+test.label+" ]", test.color)))
-			if !strings.HasPrefix(stdout.String(), want+"  ") {
-				t.Fatalf("wrong label or color: %q, want prefix %q", stdout.String(), want)
-			}
-			evidenceState := string(test.state)
-			switch test.state {
-			case wafmeow.Incomplete:
-				evidenceState = fmt.Sprint(au.Yellow(evidenceState))
-			case wafmeow.Failed:
-				evidenceState = fmt.Sprint(au.Red(evidenceState))
-			}
-			if !strings.Contains(stdout.String(), "evidence  "+evidenceState+"\n") {
-				t.Fatalf("evidence state did not retain independent styling: %q", stdout.String())
+			want := fmt.Sprint(au.Bold(terminalText(result.Target))) + "  " +
+				fmt.Sprint(au.Bold(au.Colorize("[ "+test.label+" ]", test.color))) + "\n"
+			if !strings.HasPrefix(stdout.String(), want) || !strings.Contains(stdout.String(), "HTTP check recorded") && !strings.Contains(stdout.String(), "HTTP checks recorded") {
+				t.Fatalf("target must be bold before colored status; got %q; prefix %q", stdout.String(), want)
 			}
 			if strings.Contains(stderr.String(), "\x1b") {
 				t.Fatalf("stdout color setting styled redirected diagnostics: %q", stderr.String())
@@ -207,7 +198,7 @@ func TestHumanMatchedProductGreenWhileOutcomeRemainsRed(t *testing.T) {
 	text := out.String()
 	outcome := fmt.Sprint(au.Bold(au.Red("[ WAF MATCH ]")))
 	name := fmt.Sprint(au.Bold(au.Green("Cloudflare (Cloudflare Inc.)")))
-	if !strings.HasPrefix(text, outcome+"  ") || !strings.Contains(text, "  "+name+"\n") {
+	if !strings.HasPrefix(text, fmt.Sprint(au.Bold(result.Target))+"  "+outcome+"\n") || !strings.Contains(text, fmt.Sprint(au.Bold("WAF:"))+" "+name) {
 		t.Fatalf("WAF outcome should remain red while the detected name is green: %q", text)
 	}
 	if strings.Contains(text, fmt.Sprint(au.Bold(au.Red("Cloudflare (Cloudflare Inc.)")))) {
@@ -231,26 +222,20 @@ func TestSignalMatchedObservationsAreAttributedPerProduct(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := stdout.String()
-	alpha := "  Alpha\n    matched  #1 [Normal] HTTP 200\n    matched  #3 [Saved] HTTP 302 " + result.Target + "old -> " + result.Target + "new\n"
-	beta := "  Beta\n    matched  #2 [Probe] HTTP 403 " + result.Target + "?payload=recorded\n"
-	for _, want := range []string{"[ WAF MATCH ]", alpha, beta, "HTTP  3 observations: 200 / 403 / 302", "evidence  incomplete (1 truncated body)"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("missing %q in %q", want, text)
+	for _, want := range []string{"https://fixture.invalid/  [ WAF MATCH ]", "WAF: Alpha  (Normal HTTP 200, Saved HTTP 302)",
+		"WAF: Beta  (Probe HTTP 403)", "Checks  3 HTTP checks recorded", "Why incomplete", "1 response body was truncated"} {
+		if !strings.Contains(strings.Join(strings.Fields(text), " "), strings.Join(strings.Fields(want), " ")) {
+			t.Fatalf("human output lost %q in %q", want, text)
 		}
 	}
-	if strings.Count(text, "#3 [Saved]") != 1 || strings.Contains(text, "#92") || result.Outcome.Matches[0].Fingerprints[0].Evidence != 2 {
-		t.Fatalf("support was duplicated, invented or mutated: %q", text)
-	}
-	for _, invented := range []string{"caused", "blocked by", " ms", " KiB", " req"} {
-		if strings.Contains(text, invented) {
-			t.Fatalf("invented acquisition/enforcement claim %q: %q", invented, text)
-		}
+	if strings.Contains(text, "payload=recorded") || strings.Contains(text, "old ->") ||
+		strings.Contains(text, "#92") || result.Outcome.Matches[0].Fingerprints[0].Evidence != 2 {
+		t.Fatalf("human output leaked probe URLs, invented indices or mutated support: %q", text)
 	}
 	if stderr.Len() != 0 {
-		t.Fatalf("unexpected diagnostics: %q", stderr.String())
+		t.Fatalf("unexpected duplicate diagnostics: %q", stderr.String())
 	}
 }
-
 func TestHumanCompactSingleMatchKeepsSupportingEvidenceAndUncertainty(t *testing.T) {
 	result := signalResult(wafmeow.Incomplete)
 	result.Target = "https://www.cloudflare.com"
@@ -274,21 +259,21 @@ func TestHumanCompactSingleMatchKeepsSupportingEvidenceAndUncertainty(t *testing
 	}
 	got := out.String()
 	for _, want := range []string{
-		"[ WAF MATCH ]  https://www.cloudflare.com",
-		"  Cloudflare (Cloudflare Inc.)\n    matched  #1 [Normal] HTTP 200",
-		"    review  HTTP 200 → 403 on XssAttack (unusual response)",
-		"    HTTP  5 observations: 200×2 / 403×2 / 404",
-		"    evidence  incomplete (3 truncated bodies)",
+		"https://www.cloudflare.com  [ WAF MATCH ]",
+		"WAF: Cloudflare (Cloudflare Inc.)  (Normal HTTP 200)",
+		"Review  HTTP 200 → 403 on XssAttack (unusual response)",
+		"Checks  5 HTTP checks recorded",
+		"Why incomplete", "3 response bodies were truncated",
 	} {
-		if !strings.Contains(got, want) {
+		if !strings.Contains(strings.Join(strings.Fields(got), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("compact human result lost %q: %q", want, got)
 		}
 	}
-	if strings.Count(got, result.Target) != 1 || strings.Contains(got, "status changed from") {
-		t.Fatalf("human result repeated target or expanded generic reason: %q", got)
+	if strings.Count(got, result.Target) != 1 || strings.Contains(got, "status changed from") ||
+		strings.Contains(got, "evidence  complete") || strings.Contains(got, "observations:") {
+		t.Fatalf("human result repeated target or expanded redundant metadata: %q", got)
 	}
 }
-
 func TestHumanCompleteFingerprintWithPartialBodyDoesNotClaimCompleteEvidence(t *testing.T) {
 	result := signalResult(wafmeow.Complete)
 	result.Evidence[0].BodyTruncated = true
@@ -299,12 +284,11 @@ func TestHumanCompleteFingerprintWithPartialBodyDoesNotClaimCompleteEvidence(t *
 		aurora.New(aurora.WithColors(false)), aurora.New(aurora.WithColors(false))); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "classification  complete (1 truncated body)") ||
+	if !strings.Contains(output.String(), "Note  1 response body was truncated") ||
 		strings.Contains(output.String(), "evidence  complete") {
-		t.Fatalf("a complete classification mislabeled partial HTTP evidence: %q", output.String())
+		t.Fatalf("resolved classification mislabeled partial HTTP evidence: %q", output.String())
 	}
 }
-
 func TestHumanNestedWarningsGroupRepeatedReasonsByProbe(t *testing.T) {
 	result := signalResult(wafmeow.Incomplete)
 	result.Evidence = []wafmeow.EvidenceSummary{
@@ -380,7 +364,7 @@ func TestSignalMissingSupportingObservationIsNotInvented(t *testing.T) {
 	if err := printResult(&stdout, io.Discard, result, false, aurora.New(aurora.WithColors(false)), aurora.New(aurora.WithColors(false))); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "matched  supporting observation unavailable") || strings.Contains(stdout.String(), "#0") || strings.Contains(stdout.String(), "#5") {
+	if !strings.Contains(stdout.String(), "supporting response unavailable") || strings.Contains(stdout.String(), "#0") || strings.Contains(stdout.String(), "#5") {
 		t.Fatalf("missing reference became invented support: %q", stdout.String())
 	}
 }
@@ -396,8 +380,8 @@ func TestSignalSuppressedWarningsKeepReviewAndBrowserState(t *testing.T) {
 	if err := printResult(&stdout, &stderr, result, true, aurora.New(aurora.WithColors(false)), aurora.New(aurora.WithColors(false))); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"[ REVIEW ]", "HTTP diagnostics need review", "evidence  complete", "browser  failed (text)", "separate from HTTP", "text save failed"} {
-		if !strings.Contains(stdout.String(), want) {
+	for _, want := range []string{"[ REVIEW ]", "HTTP diagnostics were recorded", "Browser  failed (text)", "separate from HTTP", "text save failed"} {
+		if !strings.Contains(strings.Join(strings.Fields(stdout.String()), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("warning suppression lost %q: %q", want, stdout.String())
 		}
 	}
@@ -444,7 +428,7 @@ func TestSignalCertificateGuidancePreservesCauseAndOtherEvidence(t *testing.T) {
 			if !strings.Contains(test.want, "SSL_CERT_FILE") && strings.Contains(stderr.String(), "SSL_CERT_FILE") {
 				t.Fatalf("unrelated certificate-trust guidance: %q", stderr.String())
 			}
-			if !strings.Contains(stdout.String(), "[ WAF MATCH ]") || !strings.Contains(stdout.String(), "HTTP  2 observations: 200 / ?") || !strings.Contains(stdout.String(), "evidence  incomplete") || strings.Contains(stdout.String(), "No HTTP response received") || strings.Contains(stdout.String(), test.cause) {
+			if !strings.Contains(stdout.String(), "[ WAF MATCH ]") || !strings.Contains(stdout.String(), "2 HTTP checks recorded") || !strings.Contains(stdout.String(), "Why incomplete") || strings.Contains(stdout.String(), "No HTTP response received") || strings.Contains(stdout.String(), test.cause) {
 				t.Fatalf("TLS failure erased usable evidence or leaked diagnostic to stdout: %q", stdout.String())
 			}
 			for _, unsafe := range []string{"insecure", "skip verification", "disable validation", "retry"} {

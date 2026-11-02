@@ -159,12 +159,15 @@ schema 1; module and report versions are separate contracts.
 ```
 
 `--jsonl` streams results on stdout; `--output` / `-O` writes an atomic report.
-Use `.json`, `.jsonl`, `.csv` or `.txt` to choose its format; other filenames
-produce TXT. Human diagnostics go to stderr. `--strict` checks evidence quality:
+Use `.json`, `.jsonl`, `.ndjson`, `.csv` or `.txt` to choose its format;
+extensionless filenames select TXT and unknown suffixes fail early. Human diagnostics go to stderr. `--strict` checks evidence quality:
 it exits **2** after publishing incomplete, failed or diagnosed results, not
 merely because a WAF matched. Configuration, input and output failures exit **1**;
 cancellation exits **130**. Reports contain results, not replayable response
-captures. See [output contracts](docs/usage.md#save-and-stream-results) and
+captures. Add `--require-results` to fail an empty input stream without replacing
+an existing report. For safe `jq` filters, missing arrays, partial streams,
+report formats and exit semantics, start with the [JSONL pipeline guide](docs/jsonl.md).
+See also [output contracts](docs/usage.md#save-and-stream-results) and
 [rate and deadline tuning](docs/usage.md#rate-and-deadline-tuning).
 
 ## Benchmarks
@@ -225,6 +228,7 @@ classification. Keep each result attached to its workload and measured build.
 | Guide | Contents |
 | --- | --- |
 | [CLI usage](docs/usage.md) | Modes, headers, scope, byte limits and cancellation |
+| [JSONL pipelines](docs/jsonl.md) | Parsing results, filtering matches, output formats, exit handling and recovery |
 | [Moving from wafw00f](docs/migrating-from-wafw00f.md) | Common flag mappings, changed semantics and pipeline migration |
 | [Browser capture](docs/browser.md) | Chromium setup, screenshots and sanitized exports |
 | [Operations](docs/operations.md) | Result semantics, safe report consumption, deployment and soak checks |

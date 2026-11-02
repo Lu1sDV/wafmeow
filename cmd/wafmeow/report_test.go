@@ -89,8 +89,8 @@ func TestHumanReportColorsOnlyMatchedProductNames(t *testing.T) {
 		}
 	}
 	if strings.Contains(text, fmt.Sprint(colored.Red("WAF MATCH"))) ||
-		!strings.Contains(text, " | incomplete | "+result.Target) {
-		t.Fatalf("human table colored outcome, URL or metadata: %q", text)
+		!strings.Contains(text, fmt.Sprint(colored.Bold(result.Target))+" | WAF MATCH | ") || !strings.Contains(text, " | incomplete\n") {
+		t.Fatalf("human table lost bold target or colored the status: %q", text)
 	}
 
 	// Redirected stderr or --no-colors produces the exact same report text
@@ -135,7 +135,7 @@ func TestHumanReportPreservesFullEscapedURLAndSupportingObservations(t *testing.
 	if err := report.replay(context.Background(), &output, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"PARTIAL URL / RESULT / EVIDENCE", "SUPPORTING OBSERVATIONS", "WAF MATCH | First\\tWAF (observations #1,#3); Second WAF (observations #2) | incomplete | " + terminalText(target)} {
+	for _, want := range []string{"PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE", "SUPPORTING OBSERVATIONS", terminalText(target) + " | WAF MATCH | First\\tWAF (observations #1,#3); Second WAF (observations #2) | incomplete"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("missing full escaped row %q", want)
 		}
@@ -204,7 +204,7 @@ func TestMachineModesDoNotCreateHumanReportSpool(t *testing.T) {
 		if code != 0 || len(decodeResultLines(t, stdout.String())) != 1 {
 			t.Fatalf("machine scan failed without a temp directory: code=%d stderr=%q", code, stderr.String())
 		}
-		if strings.Contains(stderr.String(), "URL / RESULT / EVIDENCE") {
+		if strings.Contains(stderr.String(), "TARGET / OUTCOME / PRODUCTS / EVIDENCE") {
 			t.Fatalf("machine mode emitted a URL table: %q", stderr.String())
 		}
 		if strings.Contains(strings.Join(args, " "), "--silent") {
@@ -250,10 +250,10 @@ func TestHumanReportSpoolCleanupOnEveryRunExit(t *testing.T) {
 			if err != nil || len(entries) != 0 {
 				t.Fatalf("spool leaked on %s: entries=%v err=%v", name, entries, err)
 			}
-			if name == "success" && !strings.Contains(stderr.String(), "URL / RESULT / EVIDENCE") {
+			if name == "success" && !strings.Contains(stderr.String(), "TARGET / OUTCOME / PRODUCTS / EVIDENCE") {
 				t.Fatal("human run omitted final URL table")
 			}
-			if name == "aborted input" && (!strings.Contains(stderr.String(), "PARTIAL SUMMARY") || !strings.Contains(stderr.String(), "PARTIAL URL / RESULT / EVIDENCE")) {
+			if name == "aborted input" && (!strings.Contains(stderr.String(), "PARTIAL SUMMARY") || !strings.Contains(stderr.String(), "PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE")) {
 				t.Fatalf("aborted run was not clearly partial: %q", stderr.String())
 			}
 		})
@@ -273,7 +273,7 @@ func TestHumanReportCancellationDuringFinalReplay(t *testing.T) {
 			target := "cancel-replay-row"
 			trigger := target
 			if stage == "heading" {
-				trigger = "URL / RESULT / EVIDENCE"
+				trigger = "TARGET / OUTCOME / PRODUCTS / EVIDENCE"
 			}
 			if stage != "last chunk" {
 				target += strings.Repeat("/full-path", 5000) + "/must-not-replay-tail"

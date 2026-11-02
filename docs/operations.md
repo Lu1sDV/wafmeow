@@ -12,7 +12,7 @@ generic anomalies are separate from product matches.
 | Exit code | Meaning |
 | --- | --- |
 | 0 | Run completed without a fatal error; without `--strict`, individual results may still be incomplete or failed |
-| 1 | Configuration, input, or output failure |
+| 1 | Configuration, input, output failure or zero targets when `--require-results` was selected |
 | 2 | `--strict` found incomplete, failed, or diagnosed HTTP results, or browser/artifact failures, after report publication |
 | 130 | Cancellation |
 
@@ -33,12 +33,15 @@ also exist after a failed or cancelled run.
 Empty or blank-only target input is a successful zero-target run, even with
 `--strict`. It publishes an empty-result report, replacing any previous report;
 JSON uses `[]`, JSONL and TXT contain no result records, and CSV retains its
-header. Jobs that require targets must validate the upstream producer's exit
-status and result count separately. Shell `pipefail` catches upstream failures,
-but cannot turn an upstream success with zero URLs into an error.
+header. Jobs that require targets can use `--require-results` to fail with exit 1 on
+zero processed targets without replacing the previous named report. A failed
+target still counts as processed; `--strict` separately checks quality. Shell
+`pipefail` catches upstream failures, but not upstream success with zero URLs.
 
-Use `.json`, `.jsonl`, `.csv` or `.txt` filenames explicitly. Other extensions
-(including misspellings) select TXT, and `--output -` names a literal file.
+Use `.json`, `.jsonl`, `.ndjson`, `.csv` or `.txt` filenames explicitly.
+Extensionless names select TXT; unsupported suffixes now fail before scanning.
+`--output -` is rejected; use `--jsonl` for stdout or `--output ./-` for a
+literal file named `-`.
 Result reports and journals are not replayable response captures; use the
 [documented capture formats](usage.md#offline-captures) for `--evidence`.
 

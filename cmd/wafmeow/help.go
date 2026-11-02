@@ -104,9 +104,9 @@ Examples:
 	help.WriteString("Help:\n  -h, --help\n    Show this help, including after an invalid option.\n\n")
 	help.WriteString("Automation contracts:\n")
 	for _, paragraph := range []string{
-		"Use --jsonl for structured stdout; --output writes a named file independently. Its extension selects JSON/JSONL/CSV, otherwise TXT. --output - is a literal filename, not stdout.",
+		"Use --jsonl for machine-readable stdout without --silent. --output independently publishes a named report: .json, .jsonl/.ndjson, .csv or .txt; no extension means TXT. Unknown extensions fail. --output - is not stdout; use --jsonl or --output ./- for a literal filename.",
 		"--evidence reads response captures, not result reports written by --output. Choose native captures or --evidence-format=httpx exports. Live request controls do not enable offline acquisition.",
-		"--strict checks evidence quality. Matches alone do not fail. Empty input succeeds and publishes an empty report, even with --strict. Nonzero exit does not mean no output was published.",
+		"--strict checks evidence quality. Matches alone do not fail. Empty input succeeds, even with --strict. Use --require-results to reject zero processed targets with exit 1 before a named report is published. Nonzero exit does not mean no output was published.",
 		"Rate and connection waits consume request and target deadlines. When lowering --rate, also review --concurrency and both timeouts. HTTP and browser deadlines are separate.",
 	} {
 		helpParagraph(&help, width, "  ", paragraph)
@@ -115,13 +115,13 @@ Examples:
 	help.WriteString("Exit codes:\n")
 	for _, exit := range []string{
 		"0    Completed; inspect result states, or use --strict.",
-		"1    Configuration, input or output failure.",
+		"1    Configuration, input or output failure (also zero targets with --require-results).",
 		"2    Strict found incomplete, failed or diagnosed results; reports are published first.",
 		"130  Cancelled by SIGINT or SIGTERM.",
 	} {
 		helpParagraph(&help, width, "  ", exit)
 	}
-	help.WriteString("\nDocumentation and support:\n  https://github.com/Lu1sDV/wafmeow/blob/main/docs/usage.md\n  https://github.com/Lu1sDV/wafmeow/issues\n")
+	help.WriteString("\nDocumentation and support:\n  https://github.com/Lu1sDV/wafmeow/blob/main/docs/usage.md\n  https://github.com/Lu1sDV/wafmeow/blob/main/docs/jsonl.md\n  https://github.com/Lu1sDV/wafmeow/issues\n")
 	_, err := help.WriteTo(writer)
 	return err
 }

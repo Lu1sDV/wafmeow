@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -11,22 +10,24 @@ import (
 	"github.com/Lu1sDV/wafmeow/v3/pkg/wafmeow"
 )
 
-// The default plan fits one line. Only customized safety controls need extra
-// lines. Never print targets, header values, origin values, or local paths.
+// The default plan is a short two-line configuration summary inside a rounded
+// frame; customized safety controls are listed below it. Never print targets,
+// header values, origin values, or local paths.
 func runPlanText(opts options, config wafmeow.Config) string {
 	if opts.Silent {
 		return ""
 	}
-	var plan strings.Builder
+	var heading, limits string
 	var details []string
 	defaults := wafmeow.DefaultConfig()
 	if opts.EvidenceFile != "" {
 		if opts.EvidenceFormat == "httpx" {
-			plan.WriteString("RUN PLAN  offline httpx | serial import | no network\n")
+			heading = "OFFLINE HTTPX | serial import | no network requests"
 		} else {
-			fmt.Fprintf(&plan, "RUN PLAN  offline %s | %d workers | no network\n",
-				terminalText(opts.EvidenceFormat), min(config.Concurrency, runtime.GOMAXPROCS(0)))
+			heading = fmt.Sprintf("OFFLINE %s | %d classification workers | no network requests",
+				strings.ToUpper(terminalText(opts.EvidenceFormat)), min(config.Concurrency, runtime.GOMAXPROCS(0)))
 		}
+		limits = "Saved responses only; no new requests to targets"
 		if config.MaxBodyBytes != defaults.MaxBodyBytes {
 			details = append(details, fmt.Sprintf("body limit %dB", config.MaxBodyBytes))
 		}
@@ -35,21 +36,19 @@ func runPlanText(opts options, config wafmeow.Config) string {
 		if connections == 0 {
 			connections = max(config.Concurrency, config.ProbeConcurrency)
 		}
-		mode := "deep (7 probes)"
-		parallelism := fmt.Sprintf("%d at a time", min(config.ProbeConcurrency, connections, 7))
+		mode, checks, fanout := "DEEP", 8, min(config.ProbeConcurrency, connections, 7)
 		if config.BaselineOnly {
-			mode, parallelism = "baseline (normal only)", ""
+			mode, checks, fanout = "BASELINE", 1, 1
 		} else if config.FastMode {
-			mode = "fast (3 requests)"
-			parallelism = fmt.Sprintf("%d at a time", min(3, connections))
+			mode, checks, fanout = "FAST", 3, min(3, connections)
 		}
-		if parallelism == "" {
-			fmt.Fprintf(&plan, "RUN PLAN  %s | %d workers | %s/req | %s/target\n",
-				mode, config.Concurrency, config.RequestTimeout, config.TargetTimeout)
-		} else {
-			fmt.Fprintf(&plan, "RUN PLAN  %s | %d workers | %s | %s/req | %s/target\n",
-				mode, config.Concurrency, parallelism, config.RequestTimeout, config.TargetTimeout)
+		checkUnit := "checks"
+		if checks == 1 {
+			checkUnit = "check"
 		}
+		heading = fmt.Sprintf("%s MODE | %d planned HTTP %s | %d target workers", mode, checks, checkUnit, config.Concurrency)
+		limits = fmt.Sprintf("Parallel checks: up to %d/target | Timeouts: %s/request, %s/target",
+			fanout, config.RequestTimeout, config.TargetTimeout)
 		if connections != config.Concurrency || (config.MaxConnections != 0 && config.MaxConnections != defaults.MaxConnections) {
 			details = append(details, fmt.Sprintf("%d in flight", connections))
 		}
@@ -85,15 +84,11 @@ func runPlanText(opts options, config wafmeow.Config) string {
 		}
 	}
 	if opts.JSONL {
-		details = append(details, "JSONL")
+		details = append(details, "JSONL stdout")
 	}
 	if opts.OutputFile != "" {
-		format := "TXT"
-		switch extension := strings.ToLower(filepath.Ext(opts.OutputFile)); extension {
-		case ".json", ".jsonl", ".csv":
-			format = strings.ToUpper(extension[1:])
-		}
-		details = append(details, format+" report")
+		format, _ := reportFormat(opts.OutputFile) // Validated before execution.
+		details = append(details, strings.ToUpper(format)+" report")
 	}
 	if opts.JournalFile != "" {
 		details = append(details, "journal")
@@ -101,26 +96,56 @@ func runPlanText(opts options, config wafmeow.Config) string {
 	if opts.Strict {
 		details = append(details, "strict")
 	}
-	// Bound optional detail lines to avoid accidental 80-column wrapping.
-	const limit = 76
-	const prefix = "  settings  "
-	line := prefix
-	for _, detail := range details {
-		separator := ""
-		if line != prefix {
-			separator = " | "
+	return runPlanBox(heading, limits, details)
+}
+
+// Use a restrained, rounded terminal box with a blank line after it. The fixed
+// width fits a standard 80-column terminal, and long optional settings wrap.
+func runPlanBox(heading, limits string, details []string) string {
+	const interior = 68
+	const title = "╭─ RUN PLAN "
+	var plan strings.Builder
+	plan.WriteString(title)
+	plan.WriteString(strings.Repeat("─", interior+4-len([]rune(title))-1))
+	plan.WriteString("╮\n")
+	lines := []string{heading, limits}
+	if len(details) != 0 {
+		// Keep every complete setting together. A wrapping word in the middle
+		// of "origin allowlist on" or "JSONL report" obscures its meaning.
+		current := "Settings: "
+		for _, detail := range details {
+			separator := ""
+			if strings.TrimSpace(current) != "Settings:" && strings.TrimSpace(current) != "" {
+				separator = " | "
+			}
+			if len([]rune(current))+len([]rune(separator))+len([]rune(detail)) > interior &&
+				strings.TrimSpace(current) != "Settings:" {
+				lines = append(lines, strings.TrimRight(current, " "))
+				current, separator = "          ", ""
+			}
+			current += separator + detail
 		}
-		if line != prefix && len(line)+len(separator)+len(detail) >= limit {
-			plan.WriteString(line)
-			plan.WriteByte('\n')
-			line, separator = prefix, ""
+		lines = append(lines, current)
+	}
+	for _, raw := range lines {
+		indent := strings.Repeat(" ", len(raw)-len(strings.TrimLeft(raw, " ")))
+		line := indent
+		for _, word := range strings.Fields(raw) {
+			separator := ""
+			if strings.TrimSpace(line) != "" {
+				separator = " "
+			}
+			if strings.TrimSpace(line) != "" && len([]rune(line))+len([]rune(separator))+len([]rune(word)) > interior {
+				fmt.Fprintf(&plan, "│ %-*s │\n", interior, line)
+				line, separator = indent, ""
+			}
+			line += separator + word
 		}
-		line += separator + detail
+		fmt.Fprintf(&plan, "│ %-*s │\n", interior, line)
 	}
-	if line != prefix {
-		plan.WriteString(line)
-		plan.WriteByte('\n')
-	}
+	plan.WriteString("╰")
+	plan.WriteString(strings.Repeat("─", interior+2))
+	plan.WriteString("╯\n\n")
 	return plan.String()
 }
 

@@ -105,7 +105,7 @@ def smoke(command, work, expected_version=None, require_vcs=False):
     normal_run = run([*command, *args], work)
     normal = records_from(normal_run.stdout)
     check_records(normal, version)
-    require("RUN PLAN  offline native" in normal_run.stderr,
+    require("RUN PLAN" in normal_run.stderr and "OFFLINE NATIVE" in normal_run.stderr,
             "Offline JSONL scan omitted the human run plan on stderr")
     silent = run([*command, *args, "--silent"], work)
     require(records_from(silent.stdout) == normal,
