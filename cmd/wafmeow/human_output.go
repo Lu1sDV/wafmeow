@@ -29,7 +29,7 @@ func printReadableResult(stdout, stderr io.Writer, result wafmeow.Result, suppre
 
 	for _, match := range result.Outcome.Matches {
 		support := compactMatchSupport(result, match)
-		fmt.Fprintf(&out, "  %s  %s", colors.Bold("WAF"), colors.Bold(colors.Green(terminalText(match.Product))))
+		fmt.Fprintf(&out, "  %s %s", colors.Bold("WAF:"), colors.Bold(colors.Green(terminalText(match.Product))))
 		if support != "" {
 			fmt.Fprintf(&out, "  (%s)", support)
 		}
