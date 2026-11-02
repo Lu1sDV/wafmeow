@@ -435,7 +435,7 @@ For example (illustrative output; not a live-target assertion):
 ╰────────────────────────────────────────────────────────────────────╯
 
 https://example.test  [ WAF MATCH ]
-  WAF  Example WAF  (Normal HTTP 403)
+  WAF: Example WAF  (Normal HTTP 403)
   Checks  8 HTTP checks recorded
 
 https://other.example.test  [ INCOMPLETE ]
