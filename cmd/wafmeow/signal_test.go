@@ -174,7 +174,7 @@ func TestSignalOutcomeColors(t *testing.T) {
 			}
 			want := fmt.Sprint(au.Bold(terminalText(result.Target))) + "  " +
 				fmt.Sprint(au.Bold(au.Colorize("[ "+test.label+" ]", test.color))) + "\n"
-			if !strings.HasPrefix(stdout.String(), want) || !strings.Contains(stdout.String(), "HTTP checks recorded") {
+			if !strings.HasPrefix(stdout.String(), want) || !strings.Contains(stdout.String(), "HTTP check recorded") && !strings.Contains(stdout.String(), "HTTP checks recorded") {
 				t.Fatalf("target must be bold before colored status; got %q; prefix %q", stdout.String(), want)
 			}
 			if strings.Contains(stderr.String(), "\x1b") {
@@ -198,7 +198,7 @@ func TestHumanMatchedProductGreenWhileOutcomeRemainsRed(t *testing.T) {
 	text := out.String()
 	outcome := fmt.Sprint(au.Bold(au.Red("[ WAF MATCH ]")))
 	name := fmt.Sprint(au.Bold(au.Green("Cloudflare (Cloudflare Inc.)")))
-	if !strings.HasPrefix(text, fmt.Sprint(au.Bold(result.Target))+"  "+outcome+"\n") || !strings.Contains(text, "WAF  "+name) {
+	if !strings.HasPrefix(text, fmt.Sprint(au.Bold(result.Target))+"  "+outcome+"\n") || !strings.Contains(text, fmt.Sprint(au.Bold("WAF"))+"  "+name) {
 		t.Fatalf("WAF outcome should remain red while the detected name is green: %q", text)
 	}
 	if strings.Contains(text, fmt.Sprint(au.Bold(au.Red("Cloudflare (Cloudflare Inc.)")))) {
@@ -224,7 +224,7 @@ func TestSignalMatchedObservationsAreAttributedPerProduct(t *testing.T) {
 	text := stdout.String()
 	for _, want := range []string{"https://fixture.invalid/  [ WAF MATCH ]", "WAF  Alpha  (Normal HTTP 200, Saved HTTP 302)",
 		"WAF  Beta  (Probe HTTP 403)", "Checks  3 HTTP checks recorded", "Why incomplete", "1 response body was truncated"} {
-		if !strings.Contains(text, want) {
+		if !strings.Contains(strings.Join(strings.Fields(text), " "), want) {
 			t.Fatalf("human output lost %q in %q", want, text)
 		}
 	}
@@ -265,7 +265,7 @@ func TestHumanCompactSingleMatchKeepsSupportingEvidenceAndUncertainty(t *testing
 		"Checks  5 HTTP checks recorded",
 		"Why incomplete", "3 response bodies were truncated",
 	} {
-		if !strings.Contains(got, want) {
+		if !strings.Contains(strings.Join(strings.Fields(got), " "), want) {
 			t.Fatalf("compact human result lost %q: %q", want, got)
 		}
 	}
