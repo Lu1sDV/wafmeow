@@ -30,7 +30,7 @@ const (
 // spans 100000.html through the valid seven-digit 1000000.html.
 var randomPathExpr = regexp.MustCompile(`^/(?:[1-9][0-9]{5}|1000000)\.html$`)
 
-// activeProbes is the full-mode probe set after removing the standalone
+// activeProbes is the deep-mode probe set after removing the standalone
 // SqliAttack and RceAttack requests. Order follows the catalogue.
 func activeProbes() []struct{ role, query string } {
 	return []struct{ role, query string }{
@@ -165,7 +165,7 @@ func TestAppendedDotSegmentsOnWire(t *testing.T) {
 }
 
 // TestProbeModesOnWire pins which requests each mode actually sends. The JNDI
-// canary is full-mode only, and fast mode replaces the five active probes with
+// canary is deep-mode only, and fast mode replaces the five active probes with
 // the combined probe.
 func TestProbeModesOnWire(t *testing.T) {
 	for _, test := range []struct {
@@ -175,7 +175,7 @@ func TestProbeModesOnWire(t *testing.T) {
 	}{
 		{"baseline", func(c *Config) { c.BaselineOnly = true }, []string{"Normal"}},
 		{"fast", func(c *Config) { c.FastMode = true }, []string{"Normal", "NoUserAgent", "CentralAttack"}},
-		{"full", func(*Config) {}, []string{"Normal", "NoUserAgent", "NonExistent", "XssAttack", "XxeAttack", "LfiAttack", "CentralAttack", "JndiAttack"}},
+		{"deep", func(*Config) {}, []string{"Normal", "NoUserAgent", "NonExistent", "XssAttack", "XxeAttack", "LfiAttack", "CentralAttack", "JndiAttack"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var mutex sync.Mutex
@@ -195,6 +195,9 @@ func TestProbeModesOnWire(t *testing.T) {
 			roles := make([]string, len(evidence))
 			for index, observation := range evidence {
 				roles[index] = observation.Role
+				if observation.StatusCode != http.StatusOK || observation.TransportError != "" || observation.ErrorCode != "" || observation.BodyTruncated {
+					t.Fatalf("mode %s did not retain a successful response: %+v", test.name, observation)
+				}
 			}
 			if !slices.Equal(roles, test.roles) {
 				t.Fatalf("mode %s probe roles = %q, want %q", test.name, roles, test.roles)
@@ -203,12 +206,16 @@ func TestProbeModesOnWire(t *testing.T) {
 			wire := append([]string(nil), observed...)
 			mutex.Unlock()
 			assertModeRequests(t, test.name, wire, test.roles)
+			if got := GenericDetect(evidence); got != (GenericDetection{}) {
+				t.Fatalf("mode %s invented a generic anomaly from unchanged responses: %+v", test.name, got)
+			}
 		})
 	}
 }
 
 // assertModeRequests compares on-wire request URIs with literal expectations.
-// NonExistent carries a random six-digit path, so it is checked by shape.
+// NonExistent carries a random numeric path (100000..1000000.html), so it
+// is checked by shape and range rather than a fixed value.
 func assertModeRequests(t *testing.T, mode string, observed []string, roles []string) {
 	t.Helper()
 	var fixed, random []string
@@ -252,9 +259,9 @@ func assertModeRequests(t *testing.T, mode string, observed []string, roles []st
 }
 
 // TestBlockedCombinedProbeKeepsAttributionCoarse exercises acquisition against
-// a server that blocks only the SQL injection payload. Detection still works,
-// but the evidence role is the combined probe: one response cannot attribute
-// the block to a single payload. This demonstrates the documented trade-off;
+// a server that blocks only the SQL injection payload. Generic detection must
+// attribute the status change to CentralAttack, not to an individual payload.
+// This demonstrates the documented trade-off;
 // it is not evidence of equivalent coverage to the removed standalone
 // SqliAttack and RceAttack requests.
 func TestBlockedCombinedProbeKeepsAttributionCoarse(t *testing.T) {
@@ -263,7 +270,7 @@ func TestBlockedCombinedProbeKeepsAttributionCoarse(t *testing.T) {
 		fast    bool
 		wantLen int
 	}{
-		{"full", false, 8},
+		{"deep", false, 8},
 		{"fast", true, 3},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -298,6 +305,18 @@ func TestBlockedCombinedProbeKeepsAttributionCoarse(t *testing.T) {
 			}
 			if !slices.Equal(blocked, []string{"CentralAttack"}) {
 				t.Fatalf("blocked evidence roles = %q, want only CentralAttack", blocked)
+			}
+			// Keep the expected anomaly independent of the detector's output and
+			// reason formatter: this is status-change attribution, not WAF proof.
+			want := GenericDetection{
+				Mode:         ChangeInStatus,
+				BeforeStatus: http.StatusOK,
+				AfterStatus:  http.StatusForbidden,
+				RequestType:  "CentralAttack",
+				Reason:       `status changed from 200 to 403 for "CentralAttack"`,
+			}
+			if got := GenericDetect(evidence); got != want {
+				t.Fatalf("combined probe generic attribution = %+v, want %+v", got, want)
 			}
 		})
 	}

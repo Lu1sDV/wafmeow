@@ -2,15 +2,15 @@
 
 [Quick start](../README.md) · [CLI usage](usage.md) · [Result semantics](operations.md)
 
-This guide compares **wafw00f 2.4.2** with the wafmeow v2 CLI. Flag spellings and
+This guide compares **wafw00f 2.4.2** with the wafmeow v3 CLI. Flag spellings and
 input/output schemas differ; wafmeow is not a drop-in replacement. The upstream
 reference is the [2.4.2 CLI source](https://github.com/EnableSecurity/wafw00f/blob/v2.4.2/wafw00f/main.py).
 
 ## Common commands
 
-| Intent | wafw00f 2.4.2 | wafmeow v2 |
+| Intent | wafw00f 2.4.2 | wafmeow v3 |
 | --- | --- | --- |
-| Scan one URL | `wafw00f URL` | `wafmeow --target URL` or `wafmeow -t URL` |
+| Scan one URL | `wafw00f URL` | `wafmeow --target URL --fast` or `wafmeow -t URL --fast` |
 | Scan several direct URLs | `wafw00f URL1 URL2` | Repeat `--target URL`; one URL per flag occurrence |
 | Read a target list | `-i targets.txt` | `--target-file targets.txt`; `--input targets.txt` and `-I targets.txt` are equivalent spellings |
 | Read URLs from stdin | Supply an input file | `--target-file -`, or pipe URL lines without an explicit source; `./-` is a literal filename |
@@ -19,7 +19,7 @@ reference is the [2.4.2 CLI source](https://github.com/EnableSecurity/wafw00f/bl
 | Test one product | `-t PRODUCT` | No product-selection flag; provide an explicitly reviewed reduced catalogue with `--fingerprints FILE` |
 | List products | `-l` / `--list` | `--list --silent --no-colors` |
 | Save results | `-o report.json` | `--output report.json` or `-O report.json`; replacement is atomic |
-| Choose file format | `-f json` | Use the output extension: `.json`, `.jsonl`, `.csv`, or `.txt`; other extensions select TXT |
+| Choose file format | `-f json` | Use `.json`, `.jsonl`/`.ndjson`, `.csv` or `.txt`; extensionless files select TXT, unknown suffixes are rejected |
 | Write structured stdout | `-o - -f json`; one JSON array after the scan | `--jsonl`; streams one result object per line, including incomplete/failed targets |
 | Add headers | `-H headers.txt` | Repeat inline `-H 'Name: value'`; values containing commas require [CSV quoting](usage.md#request-headers), not a header file |
 | Set request timeout | `-T 5` | `--request-timeout 5s`; separately set `--target-timeout 30s` |
@@ -37,6 +37,8 @@ expects plain URL lines. For ProjectDiscovery httpx JSONL, use
 `--evidence - --evidence-format httpx`; see the
 [producer/import contract](usage.md#httpx-response-import). A wafw00f result
 report is not a saved HTTP response capture and cannot be imported as evidence.
+The same applies to wafmeow's own result reports; see
+[captures versus reports](usage.md#offline-captures).
 
 Existing `--input` and `-I` commands remain supported without deprecation
 warnings. Select one target-file spelling once; do not combine aliases or repeat
@@ -44,15 +46,20 @@ the file flag. Direct `--target` occurrences, a target file, and `--evidence` ar
 mutually exclusive. Each direct target must be nonblank and single-line. See
 [input selection](usage.md#choose-input) for precedence and stdin examples.
 
-For output, use `--jsonl` to stream to stdout. wafmeow's `--output -` names a
-literal TXT file; it does not have wafw00f's stdout meaning. `--output` / `-O`
-selects an atomic report file and can be combined with JSONL stdout.
+For output, use `--jsonl` to stream to stdout. `--output -` is rejected with
+guidance; use `--output ./-` for a literal TXT file named `-`. `--output` / `-O`
+selects an atomic report file and can be combined with JSONL stdout. Unknown
+report suffixes now fail rather than silently creating TXT. See the
+[JSONL pipeline guide](jsonl.md) for parsing, semantics and recovery.
 
 ## Choose collection intentionally
 
-wafmeow's default active mode selects up to eight requests; `--fast` selects three.
-`--baseline` sends the normal request only. Redirects and budgets can change the
-actual request count. None of these modes is equivalent to every wafw00f run.
+Start with `--fast` for quick active fingerprinting. It selects three request
+types; `--deep` (the default, formerly called full) selects eight. Use
+`--baseline` when you want normal-response inspection without active probes.
+Baseline is optional; fast and deep already include a normal request. Redirects
+and budgets can change actual request counts. None of these modes is equivalent
+to every wafw00f run. See [collection modes](usage.md#collection-modes).
 
 Offline `--evidence` classification sends no requests. Its conclusions depend on
 the channels and completeness recorded in the capture; an imported prefix does
@@ -63,13 +70,18 @@ not become complete merely because it contains a marker.
 A useful starting point for an authorized URL list is:
 
 ```sh
-wafmeow --target-file authorized-urls.txt --baseline --jsonl --silent \
-  --output results.json --strict --rate 5
+wafmeow --target-file authorized-urls.txt --fast --jsonl --silent \
+  --output results.json --strict --require-results
 ```
 
 Parse each JSONL record's `outcome.state`, `outcome.matches`, diagnostics, and
 optional browser result. Keep incomplete/failed and unmatched results. Named
 matches can coexist with incomplete evidence, and generic anomalies are separate.
+`--strict` checks result quality, not whether a WAF matched. Empty input is a
+successful zero-target run; check the result count if your job requires targets.
+`--require-results` rejects zero processed targets without replacing a previous
+report; otherwise empty input succeeds. Configure [rates, concurrency and deadlines](usage.md#rate-and-deadline-tuning)
+together when limiting traffic.
 
 | Exit | Meaning |
 | --- | --- |
@@ -82,6 +94,6 @@ matches can coexist with incomplete evidence, and generic anomalies are separate
 machine-readable; human summaries and debug messages go to stderr. See
 [operations](operations.md) for publication and journal recovery details.
 
-For Go integrations, import `github.com/Lu1sDV/wafmeow/v2/pkg/wafmeow` and use
+For Go integrations, import `github.com/Lu1sDV/wafmeow/v3/pkg/wafmeow` and use
 keyed public struct literals. The module major and result JSON schema 1 are
 separate contracts.

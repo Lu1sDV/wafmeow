@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	httputil "github.com/Lu1sDV/wafmeow/v2/pkg/utils/http"
+	httputil "github.com/Lu1sDV/wafmeow/v3/pkg/utils/http"
 )
 
 const ResultSchemaVersion = 1
@@ -47,8 +47,18 @@ var programVersion = func() string {
 	return version
 }()
 
-// Version reports embedded module/VCS identity, or devel when unavailable.
-func Version() string { return programVersion }
+// releaseVersion is set only by the release build's Go -ldflags -X option.
+// Local builds and go install retain their original module/VCS-derived version.
+var releaseVersion string
+
+// Version reports the selected immutable release tag for packaged binaries.
+// For development and module installs it preserves Go module/VCS identity.
+func Version() string {
+	if releaseVersion != "" {
+		return releaseVersion
+	}
+	return programVersion
+}
 
 type ScanSettings struct {
 	Concurrency                int           `json:"concurrency"`
@@ -74,7 +84,7 @@ type ScanSettings struct {
 type ResultProvenance struct {
 	ProgramVersion  string            `json:"program_version"`
 	CatalogueSHA256 string            `json:"catalogue_sha256"`
-	ScanMode        string            `json:"scan_mode"`
+	ScanMode        string            `json:"scan_mode"` // "deep", "fast", "baseline", or "passive"
 	Settings        ScanSettings      `json:"settings"`
 	Import          *ImportProvenance `json:"import,omitempty"`
 }
@@ -91,7 +101,7 @@ type Result struct {
 }
 
 func makeResult(engine *Engine, target, origin string, evidence []Evidence, config Config) Result {
-	mode := "active"
+	mode := "deep"
 	if config.Passive {
 		mode = "passive"
 	} else if config.BaselineOnly {

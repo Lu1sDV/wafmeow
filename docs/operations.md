@@ -12,12 +12,15 @@ generic anomalies are separate from product matches.
 | Exit code | Meaning |
 | --- | --- |
 | 0 | Run completed without a fatal error; without `--strict`, individual results may still be incomplete or failed |
-| 1 | Configuration, input, or output failure |
+| 1 | Configuration, input, output failure or zero targets when `--require-results` was selected |
 | 2 | `--strict` found incomplete, failed, or diagnosed HTTP results, or browser/artifact failures, after report publication |
 | 130 | Cancellation |
 
 Treat nonzero exit codes as a reason to inspect both the results and stderr, not
-as evidence that no output was produced.
+as evidence that no output was produced. `--strict` checks evidence and capture
+quality: a complete named match can exit 0, while an incomplete no-match can exit
+2. A policy that fails on a named finding must inspect `outcome.matches`
+separately; generic signals are not named matches.
 
 ## Reports and durable journals
 
@@ -27,10 +30,25 @@ the previous report. Later summary or journal-close errors can return exit 1
 after the new report has been published. Streamed results and journal entries may
 also exist after a failed or cancelled run.
 
+Empty or blank-only target input is a successful zero-target run, even with
+`--strict`. It publishes an empty-result report, replacing any previous report;
+JSON uses `[]`, JSONL and TXT contain no result records, and CSV retains its
+header. Jobs that require targets can use `--require-results` to fail with exit 1 on
+zero processed targets without replacing the previous named report. A failed
+target still counts as processed; `--strict` separately checks quality. Shell
+`pipefail` catches upstream failures, but not upstream success with zero URLs.
+
+Use `.json`, `.jsonl`, `.ndjson`, `.csv` or `.txt` filenames explicitly.
+Extensionless names select TXT; unsupported suffixes now fail before scanning.
+`--output -` is rejected; use `--jsonl` for stdout or `--output ./-` for a
+literal file named `-`.
+Result reports and journals are not replayable response captures; use the
+[documented capture formats](usage.md#offline-captures) for `--evidence`.
+
 Enable a body-free result and diagnostics journal when durable records are needed:
 
 ```sh
-./wafmeow --input authorized-targets.txt --baseline --jsonl \
+./wafmeow --target-file authorized-targets.txt --fast --jsonl \
   --output results.json --diagnostics-journal results.journal.jsonl --strict
 ```
 
@@ -62,6 +80,8 @@ rates for the deployment. Active mode sends exploit-shaped payloads, including a
 JNDI canary that can make a vulnerable target attempt a loopback LDAP connection;
 see [active probe payloads](usage.md#active-probe-payloads). Size worker concurrency and memory limits together;
 the retained-evidence budget is not a process RSS cap.
+Rate/connection-slot waits consume the HTTP deadlines, so tune rates and worker
+counts together; see [rate and deadline tuning](usage.md#rate-and-deadline-tuning).
 
 A hosted service accepting arbitrary targets additionally needs independently
 enforced egress and DNS/IP destination policies, isolated jobs, CPU/memory limits,
@@ -87,7 +107,7 @@ Run operational checks against the candidate binary, native archive, and image:
 
 ```sh
 # Linux: owned loopback traffic, mixed failures, and resource accounting.
-# --seconds is the feed duration for each of baseline, fast, and full modes.
+# --seconds is the feed duration for each of baseline, fast, and deep modes.
 python3 tools/soak.py --binary ./wafmeow --output benchmarks/soak --seconds 60
 
 # Extract the native release archive and exercise its binary and fixtures.

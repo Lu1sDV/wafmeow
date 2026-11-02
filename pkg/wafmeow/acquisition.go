@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	httputil "github.com/Lu1sDV/wafmeow/v2/pkg/utils/http"
+	httputil "github.com/Lu1sDV/wafmeow/v3/pkg/utils/http"
 )
 
 func normalizedOrigin(u *url.URL) string {
@@ -400,7 +400,12 @@ func (t *targetTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.requests++
 	t.mu.Unlock()
 	if err := p.acquire(req.Context(), origin); err != nil {
-		return nil, err
+		// This RoundTrip has not reached the underlying transport. Earlier
+		// redirect hops may already have been sent, so describe only this attempt.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, fmt.Errorf("local rate/connection admission timed out (this request attempt was not sent; waiting counts toward request/target deadlines; reduce concurrency or increase request/target timeouts): %w", err)
+		}
+		return nil, fmt.Errorf("local rate/connection admission failed (this request attempt was not sent): %w", err)
 	}
 	release := func() { <-p.slots }
 	if err := req.Context().Err(); err != nil {

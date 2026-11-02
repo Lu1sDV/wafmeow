@@ -37,7 +37,31 @@ jobs:
         timeout-minutes: 5
         with:
           ref: ${{ inputs.ref }}
+          # Historical review checks need the exact PR base / pre-push commit.
+          fetch-depth: 0
           persist-credentials: false
+      - name: Check fingerprint review history
+        if: matrix.go == '1.27.3'
+        timeout-minutes: 2
+        shell: bash
+        env:
+          FINGERPRINT_REVIEW_EVENT: ${{ github.event_name }}
+          FINGERPRINT_REVIEW_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          FINGERPRINT_REVIEW_PUSH_BEFORE: ${{ github.event.before }}
+          FINGERPRINT_REVIEW_SOURCE_REF: ${{ inputs.ref }}
+        run: |
+          if [[ "$FINGERPRINT_REVIEW_EVENT" == pull_request ]]; then
+            review_base="$FINGERPRINT_REVIEW_PR_BASE"
+          elif [[ -n "$FINGERPRINT_REVIEW_SOURCE_REF" ]]; then
+            # Reusable release validation checks the frozen candidate's change.
+            review_base=$(git rev-parse --verify 'HEAD^')
+          elif [[ "$FINGERPRINT_REVIEW_EVENT" == push ]]; then
+            review_base="$FINGERPRINT_REVIEW_PUSH_BEFORE"
+          else
+            printf 'No trusted fingerprint review baseline for this event.\n' >&2
+            exit 2
+          fi
+          python3 tools/check_fingerprint_review.py --base "$review_base"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         timeout-minutes: 5
         with:
@@ -95,7 +119,7 @@ jobs:
         run: python3 -m unittest discover -s tools -p '*_test.py'
       - name: Test with race detector
         timeout-minutes: 15
-        run: go test -timeout=5m -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: go test -count=1 -timeout=5m -race -covermode=atomic -coverprofile=coverage.out ./...
       - name: Fuzz regexp matcher equivalence
         id: matcher-fuzz
         if: matrix.go == '1.27.3'
@@ -139,11 +163,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Fuzz imported availability boundaries
+        id: availability-fuzz
         if: matrix.go == '1.27.3'
         timeout-minutes: 5
         run: |
           go test ./pkg/wafmeow -run '^$' -fuzz '^FuzzAvailabilityUnusableBody$' -fuzztime=10s -parallel=2 -timeout=2m
           go test ./pkg/wafmeow -run '^$' -fuzz '^FuzzHTTPXImportCannotInventCompleteChannels$' -fuzztime=10s -parallel=2 -timeout=2m
+      - name: Retain failing availability and import fuzz corpora
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure() && steps.availability-fuzz.outcome == 'failure'
+        timeout-minutes: 3
+        with:
+          name: availability-fuzz-failure-${{ matrix.go }}
+          path: |
+            pkg/wafmeow/testdata/fuzz/FuzzAvailabilityUnusableBody
+            pkg/wafmeow/testdata/fuzz/FuzzHTTPXImportCannotInventCompleteChannels
+          if-no-files-found: warn
+          retention-days: 30
       - name: Export statement coverage
         timeout-minutes: 2
         run: go tool cover -func=coverage.out > "$RUNNER_TEMP/coverage-statements.txt"
@@ -164,6 +200,19 @@ jobs:
         if: matrix.go == '1.27.3'
         timeout-minutes: 5
         run: python3 tools/cli_options_smoke.py --binary "$PWD/wafmeow" --output "$RUNNER_TEMP/cli-option-contracts"
+      - name: Exercise startup animation with real terminals and owned fixtures
+        if: matrix.go == '1.27.3'
+        timeout-minutes: 3
+        run: python3 tools/animation_smoke.py --binary "$PWD/wafmeow" --output "$RUNNER_TEMP/animation-contracts"
+      - name: Retain startup animation evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && matrix.go == '1.27.3'
+        timeout-minutes: 3
+        with:
+          name: animation-contracts
+          path: ${{ runner.temp }}/animation-contracts
+          if-no-files-found: warn
+          retention-days: 7
       - name: Archive CLI filename fixtures
         if: always() && matrix.go == '1.27.3'
         timeout-minutes: 2
@@ -299,20 +348,24 @@ jobs:
           sudo apparmor_parser -r "$RUNNER_TEMP/wafmeow-bwrap"
       - name: Native tests
         timeout-minutes: 10
-        run: go test -timeout=5m ./...
+        run: go test -count=1 -timeout=5m ./...
       - name: Build and package native binary
         shell: bash
         timeout-minutes: 5
         run: |
           CHECK_TAG=$(python tools/release.py ci-tag)
           printf 'CHECK_TAG=%s\n' "$CHECK_TAG" >> "$GITHUB_ENV"
-          go build -trimpath -buildvcs=true -o "$RUNNER_TEMP/wafmeow$BINARY_SUFFIX" ./cmd/wafmeow
+          go build -trimpath -buildvcs=true \
+            -ldflags="-X github.com/Lu1sDV/wafmeow/v3/pkg/wafmeow.releaseVersion=${CHECK_TAG}" \
+            -o "$RUNNER_TEMP/wafmeow$BINARY_SUFFIX" ./cmd/wafmeow
           python tools/release.py package --tag "$CHECK_TAG" --revision "$(git rev-parse HEAD)" \
             --os "$RELEASE_OS" --arch "$RELEASE_ARCH" --binary "$RUNNER_TEMP/wafmeow$BINARY_SUFFIX"
       - name: Smoke extracted archive outside checkout
         shell: bash
         timeout-minutes: 5
-        run: python tools/smoke.py archive "dist/wafmeow_${CHECK_TAG}_${RELEASE_OS}_${RELEASE_ARCH}.${RELEASE_EXTENSION}"
+        run: |
+          python tools/smoke.py archive "dist/wafmeow_${CHECK_TAG}_${RELEASE_OS}_${RELEASE_ARCH}.${RELEASE_EXTENSION}" \
+            --version "$CHECK_TAG"
       - name: Native release-container build and hardened offline smoke
         if: runner.os == 'Linux'
         shell: bash

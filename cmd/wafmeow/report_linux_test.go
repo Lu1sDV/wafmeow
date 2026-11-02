@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Lu1sDV/wafmeow/v2/pkg/wafmeow"
+	"github.com/Lu1sDV/wafmeow/v3/pkg/wafmeow"
 	"golang.org/x/sys/unix"
 )
 
@@ -101,7 +101,7 @@ func TestCLICancellationUnblocksInheritedReportPipe(t *testing.T) {
 					_ = cmd.Wait()
 					t.Fatalf("final table heading: %v", err)
 				}
-				if strings.HasPrefix(line, "--------|") {
+				if strings.HasPrefix(line, "---------|") {
 					break
 				}
 			}

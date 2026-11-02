@@ -12,12 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Lu1sDV/wafmeow/v2/pkg/wafmeow"
+	"github.com/Lu1sDV/wafmeow/v3/pkg/wafmeow"
 	"github.com/logrusorgru/aurora/v4"
 )
 
 func TestHumanReportReplaysManyRowsWithBoundedWrites(t *testing.T) {
-	report, err := openHumanReport(options{})
+	report, err := openHumanReport(options{}, aurora.New(aurora.WithColors(false)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +59,62 @@ func (writer *reportCountingWriter) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
+func TestHumanReportColorsOnlyMatchedProductNames(t *testing.T) {
+	colored := aurora.New(aurora.WithColors(true))
+	report, err := openHumanReport(options{}, colored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer report.close()
+	result := wafmeow.Result{
+		Target:   "https://example.test/check",
+		Evidence: []wafmeow.EvidenceSummary{{Role: "Normal", StatusCode: 200}},
+		Outcome: wafmeow.Outcome{State: wafmeow.Incomplete, Matches: []wafmeow.Match{
+			{Product: "Cloudflare", Fingerprints: []wafmeow.FingerprintMatch{{Evidence: 0}}},
+			{Product: "Another WAF", Fingerprints: []wafmeow.FingerprintMatch{{Evidence: 0}}},
+		}},
+	}
+	if err := report.add(result); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := report.replay(context.Background(), &out, true); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, product := range []string{"Cloudflare", "Another WAF"} {
+		want := fmt.Sprint(colored.Bold(colored.Green(product)))
+		if !strings.Contains(text, want+" (observations #1)") {
+			t.Fatalf("human table did not style %q green: %q", product, text)
+		}
+	}
+	if strings.Contains(text, fmt.Sprint(colored.Red("WAF MATCH"))) ||
+		!strings.Contains(text, fmt.Sprint(colored.Bold(result.Target))+" | WAF MATCH | ") || !strings.Contains(text, " | incomplete\n") {
+		t.Fatalf("human table lost bold target or colored the status: %q", text)
+	}
+
+	// Redirected stderr or --no-colors produces the exact same report text
+	// without ANSI controls or any extra in-memory scan history.
+	plain, err := openHumanReport(options{}, aurora.New(aurora.WithColors(false)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.close()
+	if err := plain.add(result); err != nil {
+		t.Fatal(err)
+	}
+	var uncolored bytes.Buffer
+	if err := plain.replay(context.Background(), &uncolored, true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(uncolored.String(), "\x1b\r") ||
+		!strings.Contains(uncolored.String(), "Cloudflare (observations #1)") {
+		t.Fatalf("redirected report retained terminal color or lost data: %q", uncolored.String())
+	}
+}
+
 func TestHumanReportPreservesFullEscapedURLAndSupportingObservations(t *testing.T) {
-	report, err := openHumanReport(options{})
+	report, err := openHumanReport(options{}, aurora.New(aurora.WithColors(false)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +135,7 @@ func TestHumanReportPreservesFullEscapedURLAndSupportingObservations(t *testing.
 	if err := report.replay(context.Background(), &output, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"PARTIAL URL / RESULT / EVIDENCE", "SUPPORTING OBSERVATIONS", "WAF MATCH | First\\tWAF (observations #1,#3); Second WAF (observations #2) | incomplete | " + terminalText(target)} {
+	for _, want := range []string{"PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE", "SUPPORTING OBSERVATIONS", terminalText(target) + " | WAF MATCH | First\\tWAF (observations #1,#3); Second WAF (observations #2) | incomplete"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("missing full escaped row %q", want)
 		}
@@ -92,7 +146,7 @@ func TestHumanReportPreservesFullEscapedURLAndSupportingObservations(t *testing.
 }
 
 func TestHumanReportPropagatesSinkAndFileErrorsAndRemovesSpool(t *testing.T) {
-	report, err := openHumanReport(options{})
+	report, err := openHumanReport(options{}, aurora.New(aurora.WithColors(false)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +204,7 @@ func TestMachineModesDoNotCreateHumanReportSpool(t *testing.T) {
 		if code != 0 || len(decodeResultLines(t, stdout.String())) != 1 {
 			t.Fatalf("machine scan failed without a temp directory: code=%d stderr=%q", code, stderr.String())
 		}
-		if strings.Contains(stderr.String(), "URL / RESULT / EVIDENCE") {
+		if strings.Contains(stderr.String(), "TARGET / OUTCOME / PRODUCTS / EVIDENCE") {
 			t.Fatalf("machine mode emitted a URL table: %q", stderr.String())
 		}
 		if strings.Contains(strings.Join(args, " "), "--silent") {
@@ -161,7 +215,7 @@ func TestMachineModesDoNotCreateHumanReportSpool(t *testing.T) {
 			t.Fatal("JSONL lost its stderr overview")
 		}
 	}
-	if report, err := openHumanReport(options{}); err == nil {
+	if report, err := openHumanReport(options{}, aurora.New(aurora.WithColors(false))); err == nil {
 		_ = report.close()
 		t.Fatal("human spool creation error was lost")
 	}
@@ -196,10 +250,10 @@ func TestHumanReportSpoolCleanupOnEveryRunExit(t *testing.T) {
 			if err != nil || len(entries) != 0 {
 				t.Fatalf("spool leaked on %s: entries=%v err=%v", name, entries, err)
 			}
-			if name == "success" && !strings.Contains(stderr.String(), "URL / RESULT / EVIDENCE") {
+			if name == "success" && !strings.Contains(stderr.String(), "TARGET / OUTCOME / PRODUCTS / EVIDENCE") {
 				t.Fatal("human run omitted final URL table")
 			}
-			if name == "aborted input" && (!strings.Contains(stderr.String(), "PARTIAL SUMMARY") || !strings.Contains(stderr.String(), "PARTIAL URL / RESULT / EVIDENCE")) {
+			if name == "aborted input" && (!strings.Contains(stderr.String(), "PARTIAL SUMMARY") || !strings.Contains(stderr.String(), "PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE")) {
 				t.Fatalf("aborted run was not clearly partial: %q", stderr.String())
 			}
 		})
@@ -219,7 +273,7 @@ func TestHumanReportCancellationDuringFinalReplay(t *testing.T) {
 			target := "cancel-replay-row"
 			trigger := target
 			if stage == "heading" {
-				trigger = "URL / RESULT / EVIDENCE"
+				trigger = "TARGET / OUTCOME / PRODUCTS / EVIDENCE"
 			}
 			if stage != "last chunk" {
 				target += strings.Repeat("/full-path", 5000) + "/must-not-replay-tail"

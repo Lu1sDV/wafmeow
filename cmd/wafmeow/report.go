@@ -8,7 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Lu1sDV/wafmeow/v2/pkg/wafmeow"
+	"github.com/Lu1sDV/wafmeow/v3/pkg/wafmeow"
+	"github.com/logrusorgru/aurora/v4"
 )
 
 // Only formatted, body-free rows live on disk; replay never retains the scan.
@@ -16,9 +17,10 @@ type humanReportSpool struct {
 	file                 *os.File
 	size                 int64
 	explicitAvailability bool
+	colors               *aurora.Aurora
 }
 
-func openHumanReport(opts options) (*humanReportSpool, error) {
+func openHumanReport(opts options, colors *aurora.Aurora) (*humanReportSpool, error) {
 	if opts.Silent || opts.JSONL {
 		return nil, nil
 	}
@@ -26,7 +28,7 @@ func openHumanReport(opts options) (*humanReportSpool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create human report spool: %w", err)
 	}
-	return &humanReportSpool{file: file}, nil
+	return &humanReportSpool{file: file, colors: colors}, nil
 }
 
 func (report *humanReportSpool) add(result wafmeow.Result) error {
@@ -38,7 +40,14 @@ func (report *humanReportSpool) add(result wafmeow.Result) error {
 		if i != 0 {
 			products.WriteString("; ")
 		}
-		products.WriteString(terminalText(match.Product))
+		// Style only validated fingerprint names, never separators, URLs or
+		// supporting observation references. The spool remains bounded and
+		// replay stays a streaming copy with no additional retained rows.
+		name := terminalText(match.Product)
+		if report.colors != nil {
+			name = fmt.Sprint(report.colors.Bold(report.colors.Green(name)))
+		}
+		products.WriteString(name)
 		products.WriteString(" (observations ")
 		support := supportingEvidence(match, len(result.Evidence))
 		if len(support) == 0 {
@@ -60,7 +69,11 @@ func (report *humanReportSpool) add(result wafmeow.Result) error {
 		report.explicitAvailability = true
 		state = "classification " + state + "; " + channelSummary(result)
 	}
-	row := fmt.Sprintf("%s | %s | %s | %s\n", humanOutcome(result), products.String(), state, terminalText(result.Target))
+	target := terminalText(result.Target)
+	if report.colors != nil {
+		target = fmt.Sprint(report.colors.Bold(target))
+	}
+	row := fmt.Sprintf("%s | %s | %s | %s\n", target, humanOutcome(result), products.String(), state)
 	n, err := io.WriteString(report.file, row)
 	if err == nil && n != len(row) {
 		err = io.ErrShortWrite
@@ -78,19 +91,19 @@ func (report *humanReportSpool) replay(ctx context.Context, writer io.Writer, fi
 		return nil
 	}
 	writer = reportReplayWriter{ctx: ctx, writer: writer}
-	label := "URL / RESULT / EVIDENCE"
+	label := "TARGET / OUTCOME / PRODUCTS / EVIDENCE"
 	if !finished {
-		label = "PARTIAL URL / RESULT / EVIDENCE (completed rows only)"
+		label = "PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE (completed rows only)"
 	}
 	stateLabel := "HTTP EVIDENCE"
 	if report.explicitAvailability {
-		label = "URL / RESULT / CLASSIFICATION / CHANNELS"
+		label = "TARGET / OUTCOME / PRODUCTS / CLASSIFICATION / CHANNELS"
 		if !finished {
 			label = "PARTIAL " + label + " (completed rows only)"
 		}
 		stateLabel = "HTTP CLASSIFICATION / CHANNELS"
 	}
-	if _, err := fmt.Fprintf(writer, "\n%s\nOUTCOME | PRODUCTS (SUPPORTING OBSERVATIONS) | %s | FULL URL\n--------|-----------------------------------|---------------|---------\n", label, stateLabel); err != nil {
+	if _, err := fmt.Fprintf(writer, "\n%s\nFULL URL | OUTCOME | PRODUCTS (SUPPORTING OBSERVATIONS) | %s\n---------|---------|-----------------------------------|---------------\n", label, stateLabel); err != nil {
 		return fmt.Errorf("write human report table: %w", err)
 	}
 	// Fixed separators avoid tabwriter's whole-table buffering on large scans.

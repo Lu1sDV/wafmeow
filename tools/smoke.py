@@ -102,8 +102,15 @@ def smoke(command, work, expected_version=None, require_vcs=False):
         require(version == "wafmeow " + expected_version, version)
 
     args = ["--evidence", CAPTURE.as_posix(), "--jsonl"]
-    normal = records_from(run([*command, *args], work).stdout)
+    normal_run = run([*command, *args], work)
+    normal = records_from(normal_run.stdout)
     check_records(normal, version)
+    require("RUN PLAN" in normal_run.stderr and "OFFLINE NATIVE" in normal_run.stderr,
+            "Offline JSONL scan omitted the human run plan on stderr")
+    silent = run([*command, *args, "--silent"], work)
+    require(records_from(silent.stdout) == normal,
+            "Silent mode changed the result records")
+    require(silent.stderr == "", "Silent mode emitted a run plan or summary")
     human = run([*command, "--evidence", CAPTURE.as_posix(), "--no-colors"], work)
     for record in normal:
         require(record["target"] in human.stdout and record["target"] in human.stderr,
@@ -140,7 +147,7 @@ def smoke(command, work, expected_version=None, require_vcs=False):
     require(set(work.iterdir()) == initial_files | {
         work / "report.json", work / "malformed.jsonl", blocked,
     }, "Report failure left unexpected temporary files")
-    print(f"{version}: help, captures, human tables, JSONL, strict exit and atomic reports passed")
+    print(f"{version}: help, captures, run plan, silent mode, human tables, JSONL, strict exit and atomic reports passed")
 
 
 def extract_archive(archive, work, binary_stem="wafmeow"):
@@ -381,7 +388,7 @@ def main():
     container.add_argument("--runtime", "--container-runtime", default=os.environ.get("DOCKER", "docker"),
                            help="Container command (default: DOCKER environment variable or docker)")
     for subparser in (archive, container):
-        subparser.add_argument("--version", help="Expected embedded program version, not the release tag")
+        subparser.add_argument("--version", help="Expected embedded program version (the exact tag for release archives)")
     args = parser.parse_args()
     if args.mode == "archive":
         smoke_archive(args.path.resolve(), args.version)

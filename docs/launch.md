@@ -17,8 +17,8 @@ completed by merging documentation alone.
   Intel to workflow YAML does not automatically add them to required checks.
 - [ ] Packaged notices in `LICENSE.md` are current, complete and present in every
   archive/image.
-- [ ] Release under a **v2** tag consistent with `go.mod`. Explain the `/v2`
-  import-path change with the [v2 API guide](library.md#v2-evidence-api), and link
+- [ ] Release under a **v3** tag consistent with `go.mod`. Explain the `/v3`
+  import-path change with the [Go library guide](library.md#module-path), and link
   the [wafw00f migration guide](migrating-from-wafw00f.md) for CLI users.
 - [ ] Verify the actual release hashes, binary identities, manifest and
   attestations; confirm immutable releases are enabled in repository settings.
@@ -100,22 +100,21 @@ it is not needed to justify the description.
 Use the [reproducible offline comparison](benchmarks.md#reproduce-the-current-checkout)
 and retain its source, hardware, dependency and corpus identities. Publish the
 verified artifacts with a benchmark claim. Do not rerun the unpatched v1.0.0
-binary to market the current v2 candidate.
+binary to market the current v3 candidate.
 
 A ratio can be reported as “wafw00f/wafmeow median classification latency on this
 saved synthetic corpus,” with the exact workload and environment. The live table
 completes different amounts of work and does not support an unqualified “× faster”
 headline. The README carries the recorded live comparison with explicit mode,
-date, build and accounting links: on the 2,000-target run from clean commit
-`836252b`, before HTTP/1 connection reuse
-([ADR 0002](../adrs/0002-http1-connection-reuse-for-probes.md)), the **median
-elapsed ratio was 5.90× at 100 workers in fast mode and 0.90× at one worker in
-full mode**. The reused-connection build's one-worker result is recorded in the
-[connection-reuse comparison](benchmarks.md#connection-reuse-comparison); do not
-merge it into the older table. Slower cells must stay visible beside faster ones.
-Report per-block returned and complete counts with any live claim, and keep
-offline conformance results attached to their own workload. The
-[2,000-target protocol](benchmarks.md#a-new-2000-target-run) governs the next run.
+date, build and accounting links: on the 600-target VPS run completed 30–31
+October 2026, with a 600-target non-CDN-plus-CDN Tranco sample, the **median elapsed ratio
+was 12.45× at 100 workers in fast mode and 4.04× at one worker in fast mode; deep
+mode (then called full) was 5.12× and 2.00× respectively**. Slower cells must stay visible beside
+faster ones. Report per-block returned and complete counts with any live claim,
+and keep offline conformance results attached to their own workload. The
+[VPS comparison protocol](benchmarks.md#reproduce-the-vps-comparison) governs the
+next run. The older 2,000-target laptop table and connection-reuse measurements
+remain as historical evidence, not current primary numbers.
 
 The README already has a mascot, animated demo, source build/install commands,
 structured-output examples and an authorized discovery pipeline. Keep the first

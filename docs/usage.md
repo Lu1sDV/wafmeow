@@ -9,9 +9,9 @@ wafmeow --help
 wafmeow --silent --list --no-colors
 ```
 
-The `--flag value` spellings below work on every supported platform. Windows
-help also presents native `/flag:value` spellings; the option names and values
-have the same meaning.
+Help uses the portable `--flag value` / `--flag=value` spellings on every
+supported platform. Native Windows `/flag:value` spellings remain accepted;
+the option names and values have the same meaning.
 
 ## Choose input
 
@@ -41,15 +41,18 @@ or an authorized URL file:
 
 ```sh
 wafmeow --target http://127.0.0.1:8080 --target http://127.0.0.1:8081 \
-  --baseline --jsonl
-wafmeow --target-file authorized-urls.txt --baseline --jsonl
+  --fast
+wafmeow --target-file authorized-urls.txt --fast --jsonl
 printf '%s\n' http://127.0.0.1:8080 |
-  wafmeow --target-file - --baseline --jsonl
+  wafmeow --target-file - --fast --jsonl
 ```
 
 Empty or multiline direct-target arguments and conflicting/repeated singular
 source flags are configuration errors and exit 1. Errors within a streamed input
 can occur after earlier valid results have been emitted; see [operations](operations.md).
+An empty or blank-only target stream is a successful zero-target run, including
+with `--strict`; a named report is replaced with its empty-result representation.
+See [empty-input handling](operations.md#reports-and-durable-journals) for automation.
 
 ### Updating existing scripts
 
@@ -60,26 +63,42 @@ file, stdin, or repeated flags instead. Repeated singular sources are rejected
 instead of silently overriding earlier values.
 
 Explicit browser modifiers need an enabled browser, explicit journal batching
-needs a journal, and probe parallelism above 1 needs full mode. Target concurrency
+needs a journal, and probe parallelism above 1 needs deep mode. Target concurrency
 is limited to 1..65,536 before workers are created. The sections below describe
 those dependencies and defaults. Arguments already quoted by the shell retain
 their literal contents; headers use the documented CSV quoting rules.
 
 ## Collection modes
 
-| Mode | Network behavior |
-| --- | --- |
-| Default | Up to eight selected active requests, before redirects; serial after the normal request unless `--probe-concurrency` is raised |
-| `--fast` | Three selected active requests launched without a fixed stagger; fewer requests, **not passive** or a latency guarantee |
-| `--baseline` | One normal request, subject to redirect and request budgets |
+| Goal | Mode | Network behavior |
+| --- | --- | --- |
+| Quick active fingerprinting | `--fast` | Three selected request types: normal, no-user-agent and combined; launched without a fixed stagger |
+| Broader active probing | `--deep` (default) | Eight selected request types; serial after the normal request unless `--probe-concurrency` is raised |
+| Inspect normal responses only | `--baseline` | One normal request, without active probes |
+| Reuse saved responses | `--evidence FILE` | Offline classification; no network requests |
 
-`--fast` and `--baseline` are mutually exclusive. Values 2..8 for
-`--probe-concurrency` apply to default full mode; fast and baseline modes require
-the default value of 1. Explicit `--probe-concurrency 1` is also valid.
+Choose `--baseline` when you want to inspect ordinary responses without active
+probes. It still classifies headers, cookies and usable bodies, and can find
+fingerprints already present there. It cannot expose a fingerprint that appears
+only in a response to an omitted probe. Baseline is a complete optional workflow,
+not a saved comparison file or a preparation step: fast and deep already include
+the normal request. All live request counts are before redirects and subject to
+budgets; fast is not passive or a latency guarantee.
+
+`--fast`, `--deep` and `--baseline` are mutually exclusive; omitting all three
+selects `--deep`. Values 2..8 for `--probe-concurrency` apply only to deep mode;
+fast and baseline require the default value of 1. Explicit
+`--probe-concurrency 1` is also valid. `--evidence` cannot be combined with any
+live mode flag.
+
+In result provenance, the default live `scan_mode` is now `"deep"` instead of
+`"active"`; `"fast"`, `"baseline"` and offline `"passive"` are unchanged.
+Result JSON remains schema 1. Consumers of historical and current reports need
+the [mode-value migration guidance](library.md#versioning).
 
 ### Active probe payloads
 
-Full mode sends one normal request, one no-user-agent request, one random-path
+Deep mode sends one normal request, one no-user-agent request, one random-path
 request, and five active probes: separate XSS, XXE and LFI probes (`p`), one
 combined probe (`l`, `l2`, `d`, `v`, `c`, `r`, `h`), and a JNDI canary (`p`).
 `--fast` sends only the normal, no-user-agent and combined requests. The JNDI
@@ -115,6 +134,14 @@ output do not require an installed browser. See [browser capture](browser.md) fo
 its separate dependencies, scope and resource limits.
 
 ## Offline captures
+
+`--evidence` reads response captures, not wafmeow result reports. Native JSONL
+records contain `target` and `evidence` observations with the response channels
+needed for classification; see the [example captures](../assets/demo/captures.jsonl)
+and [evidence contract](library.md#evidence-api). `--jsonl`, `--output` and
+diagnostics journals contain results and evidence summaries, not the original
+response bodies, and cannot be replayed as native captures. Use
+`--evidence-format httpx` for supported httpx response exports.
 
 From the repository root after building:
 
@@ -186,7 +213,7 @@ For a continuing upstream URL feed:
 
 ```sh
 httpx -stream -silent < authorized-hosts.txt |
-  wafmeow --target-file - --jsonl --silent
+  wafmeow --target-file - --fast --jsonl --silent
 ```
 
 This performs new wafmeow requests. Each network-producing stage has its own
@@ -293,13 +320,13 @@ For JSON URL extraction (new acquisition, not reuse):
 ```sh
 httpx -l authorized-hosts.txt -silent -json |
   jq --unbuffered -r 'select(.failed != true) | .url // empty' |
-  wafmeow --jsonl --silent
+  wafmeow --target-file - --fast --jsonl --silent
 ```
 
 For a reverse pipeline selecting named matches:
 
 ```sh
-wafmeow --target-file urls.txt --jsonl --silent |
+wafmeow --target-file urls.txt --fast --jsonl --silent |
   jq --unbuffered -r 'select(((.outcome.matches // []) | length) > 0) | .target' |
   httpx -stream -silent -status-code
 ```
@@ -349,18 +376,32 @@ upstream omissions are never treated as negative detections.
 | Stream machine-readable results on stdout | `--jsonl` |
 | Save a final report atomically | `--output results.json` or `-O results.json` |
 | Stream and save the same run | `--jsonl --output results.csv` |
-| Suppress human scan output | `--silent` together with `--jsonl` or `--output` |
+| Suppress routine human output | `--silent` with `--jsonl` or `--output` |
 | Treat incomplete or diagnosed results as a failing check | `--strict`; exit 2 after report publication |
+| Fail on zero processed targets | `--require-results`; exit 1 and preserve the previous named report |
 
-`--output` selects a **file**, with its case-insensitive extension choosing JSON,
-JSONL, CSV or TXT; other extensions select TXT. The old destination is replaced
-atomically when the report is published. `--output -` creates a literal TXT file
-named `-`. Use `--jsonl` for stdout. A named JSONL report is also published
-atomically; `--diagnostics-journal` provides append-and-sync recording during the
-run. See [report and journal behavior](operations.md#reports-and-durable-journals).
+`--jsonl` writes JSON-only stdout without needing `--silent`. The run plan and
+summary go to stderr. `--silent` hides routine human stderr messages, not fatal
+errors or explicitly requested `--debug` output.
 
-JSONL stdout contains only result objects. Human summaries and explicit `--debug`
-output use stderr. `--silent` suppresses human scan output but does not hide fatal
+`--output` publishes a **separate final file**. Suffixes select JSON
+(`.json`), JSONL (`.jsonl` / `.ndjson`), CSV (`.csv`), or TXT (`.txt`);
+extensionless names select TXT. Unknown suffixes now fail early instead of
+silently creating TXT. `--output -` is rejected: use `--jsonl` for stdout
+or `--output ./-` for a literal file named `-`. Named reports replace
+their destination atomically after successful processing; `--diagnostics-journal`
+is an independent append/sync sink for recovery. See
+[JSONL pipeline guide](jsonl.md) for actual results, safe `jq` expressions,
+independent output streams and partial-stream semantics.
+
+`--strict` is an evidence-quality check, not a fail-on-WAF switch. A complete
+result with a named match can exit 0; an incomplete result without any match can
+exit 2. Empty input succeeds unless `--require-results` is used. With that flag,
+zero targets exit 1 and an existing named report is preserved; a processed target
+with failed classification still counts as an occurrence.
+
+JSONL stdout contains only result objects. The run plan, human summaries and
+explicit `--debug` output use stderr. `--silent` suppresses human scan output but does not hide fatal
 errors or explicitly requested debug output. `--no-warning` hides diagnostic
 prose without changing result states, diagnostics in reports, or strict-mode
 outcomes.
@@ -375,47 +416,81 @@ wafmeow --evidence assets/demo/captures.jsonl --jsonl --silent \
 
 ## Human results and final overview
 
-Without `--jsonl` or `--silent`, results stream in completion order as compact
-Signal reports. Saved captures retain input order. Each product lists **matched
-on** observation numbers, request roles and HTTP statuses from its actual
-fingerprint evidence. Numbers start at 1 for each target and identify observations,
-not wire-request attempts or retries. Live probes retain their final response and
-redirect-chain metadata in one observation; followed redirects do not receive
-separate numbers. A match does not prove that a probe triggered blocking.
-The debug and JSON evidence indexes remain zero-based.
+For interactive human scans, the cat-and-brick-wall header appears first.
+A compact, rounded **RUN PLAN** box follows, then a **blank line** before any
+target result. The box clearly states the selected DEEP/FAST/BASELINE mode,
+**planned** HTTP checks, target workers, maximum parallel checks per target,
+and explicitly labeled **5s/request** and **30s/target** defaults. Redirects
+and retries can increase actual wire requests; the plan never claims an exact
+count. Optional settings wrap inside the box without including input URLs,
+origin values, header secrets, or local paths. Offline plans explicitly say
+there will be **no network requests**. The plan uses stderr even in human mode.
+
+For example (illustrative output; not a live-target assertion):
+
+```text
+╭─ RUN PLAN ──────────────────────────────────────────────────────────╮
+│ DEEP MODE | 8 planned HTTP checks | 20 target workers              │
+│ Parallel checks: up to 1/target | Timeouts: 5s/request, 30s/target │
+╰────────────────────────────────────────────────────────────────────╯
+
+https://example.test  [ WAF MATCH ]
+  WAF: Example WAF  (Normal HTTP 403)
+  Checks  8 HTTP checks recorded
+
+https://other.example.test  [ INCOMPLETE ]
+  Checks  8 HTTP checks recorded
+  Redirect  8 checks: HTTP 302 to https://elsewhere.example.test (outside allowed scope)
+  Why incomplete  Some WAF fingerprint checks remain unresolved because
+                  8 checks stopped at redirects outside the allowed scope;
+                  destination responses were not fetched. A missing match
+                  here is not evidence that no WAF is present.
+```
+
+The **target comes first and is bold** on color-capable terminals; the outcome
+appears after it. Named WAF matches appear once each on concise `WAF` rows
+with supporting probe role/status, not duplicated product headings or numeric
+evidence indices. `Checks` uses a bold count of HTTP *observations*, not
+on-wire request attempts. Complete cases omit redundant “evidence complete”
+rows and raw status histograms. Unusual generic responses appear as `Review`
+and never imply probe causation.
+
+Scope-blocked redirects are grouped by **destination origin and status**:
+the normal human view does **not** print each encoded probe query or full
+payload URL. It explains that the configured redirect scope prevented
+following those URLs. Full redirect paths, payload URLs, per-probe metadata,
+diagnostic codes and zero-based evidence references remain available through
+`--jsonl` and `--debug`; the compact view never changes the result schema.
+Other HTTP diagnostics still use stderr and retain their original causes,
+including actionable TLS certificate guidance. `--no-warning` hides those
+diagnostic blocks, but not the plain-English reason for an incomplete/failed
+classification. A WAF match may coexist with incomplete checks.
 
 | Label | Meaning |
 | --- | --- |
-| `WAF MATCH` (red) | A named fingerprint matched; HTTP evidence may still be incomplete |
-| `NO WAF MATCH` (green) | Complete evaluation with no named match, unusual response signal or HTTP diagnostic—not proof of WAF absence |
-| `INCOMPLETE` (amber) | No named match and insufficient evidence for a complete evaluation |
-| `REVIEW` (amber) | Complete evaluation with an unusual response signal or HTTP diagnostic |
+| `WAF MATCH` (red) | Named fingerprint evidence matched; unrelated product checks may still be incomplete |
+| `NO WAF MATCH` (green) | Complete named classification with no unusual signal or HTTP diagnostic; not proof of absence |
+| `INCOMPLETE` (amber) | No named match and some fingerprints cannot be settled from the available evidence |
+| `REVIEW` (amber) | Complete classification but unusual response signals, HTTP diagnostics or channel issues warrant review |
 | `ERROR` (red) | Target evaluation failed |
 
-HTTP completeness is shown separately, including amber incomplete evidence on
-matched targets. Browser outcomes and artifact failures remain separate from HTTP.
-No latency, byte count or confidence is inferred from unavailable metadata.
+At scan end, stderr still receives a disjoint outcome overview and the
+full URL/result/evidence table, retaining every target and supporting-observation
+reference. A partial run labels that summary as partial. This table is not
+the machine interface; use JSONL for automation. The private disk-backed human
+report spool keeps large scans bounded in memory and is removed on normal/error
+exits.
 
-At scan end, stderr receives a disjoint outcome overview, separate HTTP/browser
-totals, and a full URL/result/evidence table including supporting observation
-numbers. URL rows retain completion order (input order for captures); no targets
-are silently omitted or abbreviated. Input/acquisition failures label the available
-tables partial. Cancellation exits 130 and may stop console output immediately;
-a report file already atomically published before final replay remains published.
-Human-mode table rows use a private temporary file, removed on normal/error exits,
-so replay does not retain the whole scan in memory. Large scans produce large
-tables; use `--jsonl` for automation rather than parsing human layout.
+Logo animation remains opt-in to terminal capability: use `--no-animation`
+for a static cat, or `--no-colors` / `NO_COLOR` for static escape-free output.
+JSONL and silent runs do not animate. Narrow/unknown terminal dimensions,
+`TERM=dumb`, redirected stdout and terminal resizing prevent unsafe redraws.
+The rounded plan reserves its actual displayed terminal rows so the animation
+does not paint over it. Help, version and product listing do not animate.
+
 On Unix, cancellation also interrupts blocked CLI pipe outputs. Windows checks
-cancellation between writes but cannot interrupt an already blocked synchronous
-output write. Library/test writers remain caller-owned.
-
-Use JSONL stdout or JSON/JSONL/CSV/TXT report files for structured output.
-`--jsonl` prints only the overview to stderr, not the URL table. `--silent`
-suppresses human scan output; `--no-warning` hides diagnostic prose but preserves
-outcome and completeness. Color is disabled for redirected output, `NO_COLOR`,
-`TERM=dumb`, or `--no-colors`. Diagnostics use stderr's own terminal status for
-color, independently of stdout. HTTP diagnostics appear one per row under a
-single warning header, with descriptions aligned after the escaped role tags.
+cancellation between writes, but cannot interrupt an already blocked
+synchronous output write. Library/test writers remain caller-owned.
 
 ### Certificate verification failures
 
@@ -476,7 +551,7 @@ Overrides apply to every selected request.
 | Target line size | Go's 64 KiB scanner token limit |
 | Catalogue size | At most 8 MiB; one JSON array with known fields and valid HTTP header names |
 | Target concurrency | `--concurrency` / `-c` accepts 1..65536; default 20 |
-| Full-mode probe concurrency | `--probe-concurrency` defaults to 1; values 2..8 run active probes concurrently after the normal response succeeds and cannot be combined with `--fast` or `--baseline` |
+| Deep-mode probe concurrency | `--probe-concurrency` defaults to 1; values 2..8 run active probes concurrently after the normal response succeeds and cannot be combined with `--fast` or `--baseline` |
 | Response body size | `--max-body-bytes` defaults to 1,048,576 decoded bytes and must be positive |
 | Response header size | `--max-response-header-bytes` defaults to 65,536 bytes; 0 selects that default |
 | Retained HTTP evidence | `--max-target-evidence-bytes` defaults to 16,777,216 bytes per target across all probes; 0 selects that default |
@@ -485,10 +560,37 @@ Overrides apply to every selected request.
 | Globally in-flight requests | `--max-connections` defaults to 0, following the larger of `--concurrency` and `--probe-concurrency`. Slots include response-body reads |
 | Redirect limit | `--max-redirects` defaults to 5 per request; 0 follows none |
 
+### Rate and deadline tuning
+
+`--rate` limits global HTTP requests per second; `--per-origin-rate` limits each
+origin separately. Both default to 0 (no pacing), and redirects count as requests.
+These limits are independent of target workers (`--concurrency`), in-flight HTTP
+slots (`--max-connections`) and deep-mode probe workers (`--probe-concurrency`).
+They do not limit an upstream process such as httpx.
+
+For a conservative starting point with one target at a time and at most five
+HTTP requests per second:
+
+```sh
+wafmeow --target-file authorized-urls.txt --fast --concurrency 1 --rate 5 \
+  --jsonl --output results.json --strict
+```
+
+The request deadline starts before a probe waits for a local rate/connection slot
+and covers its redirects and body reads. The target deadline covers the HTTP
+probe set, including these waits, once a worker starts acquisition; it does not
+limit time waiting for input, browser capture, or report output. Browser capture
+has its own deadline. Low rates combined with many workers can therefore exhaust
+HTTP deadlines while requests are still waiting locally. Start with lower
+concurrency and adjust deadlines for the chosen rate and workload; a timeout
+alone does not establish that the remote server was slow.
+
+### Other limit interactions
+
 Parallel probes are also bounded by `--max-connections`. At 0 it follows the
 larger of target concurrency and probe concurrency, so raising
 `--probe-concurrency` alone takes effect. On 100 Tranco targets at one worker,
-probe concurrency 4 and 8 reduced full-mode elapsed time from 113.2 s to 68.0 s
+probe concurrency 4 and 8 reduced deep-mode elapsed time from 113.2 s to 68.0 s
 and 58.7 s with unchanged named, generic and complete counts. Lowering
 `--max-body-bytes` to 102,400 saved about 3% but truncated 24 probes and reduced
 complete evidence by five targets; lowering `--request-timeout` to 1 s saved

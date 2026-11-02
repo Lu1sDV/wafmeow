@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Lu1sDV/wafmeow/v2/pkg/wafmeow"
+	"github.com/Lu1sDV/wafmeow/v3/pkg/wafmeow"
 )
 
 func runImportCLI(t *testing.T, stdin io.Reader, piped bool, args ...string) (int, string, string) {
@@ -154,15 +154,16 @@ func TestCLIExplicitAvailabilityLabelsSurviveNoWarning(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("human import exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
-			for _, output := range []string{stdout, stderr} {
-				for _, want := range []string{"classification incomplete", "headers partial", "reason unavailable", "body unknown"} {
-					if !strings.Contains(output, want) {
-						t.Errorf("missing %q in human output %q", want, output)
-					}
+			for _, want := range []string{"[ INCOMPLETE ]", "Why incomplete", "headers partial", "reason unavailable", "body unknown"} {
+				if !strings.Contains(stdout, want) {
+					t.Errorf("missing %q in human output %q", want, stdout)
 				}
-				if strings.Contains(output, "evidence complete") || strings.Contains(output, "[ NO WAF MATCH ]") || strings.Contains(output, "NO WAF MATCH | 1") || strings.Contains(output, "WARN ") {
-					t.Errorf("misleading completeness or unsuppressed warning: %q", output)
-				}
+			}
+			if !strings.Contains(stderr, "HTTP classification") {
+				t.Errorf("missing summary classification contract: %q", stderr)
+			}
+			if strings.Contains(stdout+stderr, "evidence complete") || strings.Contains(stdout+stderr, "[ NO WAF MATCH ]") || strings.Contains(stdout+stderr, "NO WAF MATCH | 1") || strings.Contains(stdout+stderr, "WARN ") {
+				t.Errorf("misleading completeness or unsuppressed warning: stdout=%q stderr=%q", stdout, stderr)
 			}
 		})
 	}
@@ -321,10 +322,12 @@ func TestCLICompleteClassificationDoesNotImplyCompleteChannels(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("native classification exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	for _, output := range []string{stdout, stderr} {
-		if !strings.Contains(output, "classification complete") || !strings.Contains(output, "body unknown") ||
-			strings.Contains(output, "[ NO WAF MATCH ]") || strings.Contains(output, "NO WAF MATCH | 1") {
-			t.Errorf("channel availability hidden by classification completeness: %q", output)
-		}
+	if !strings.Contains(stdout, "Channels") || !strings.Contains(stdout, "body unknown") ||
+		!strings.Contains(stdout, "Classification resolved") || !strings.Contains(stdout, "[ REVIEW ]") ||
+		strings.Contains(stdout+stderr, "[ NO WAF MATCH ]") || strings.Contains(stdout+stderr, "NO WAF MATCH | 1") {
+		t.Errorf("channel availability hidden by classification completeness: stdout=%q stderr=%q", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "HTTP classification: complete 1") {
+		t.Fatalf("summary no longer distinguishes completed classification: %q", stderr)
 	}
 }

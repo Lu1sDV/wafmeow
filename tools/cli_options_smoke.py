@@ -13,14 +13,21 @@ Exit status is zero only when every case and help-contract check passes.
 """
 
 import argparse
+import errno
+import fcntl
 import hashlib
 import itertools
 import json
 import os
 from pathlib import Path
+import pty
+import selectors
 import shutil
+import signal
+import struct
 import subprocess
 import sys
+import termios
 import time
 
 parser = argparse.ArgumentParser(description='Offline CLI behavior review against an explicitly selected binary.')
@@ -43,7 +50,56 @@ BASE = ['--jsonl', '--silent', '--no-colors', '--concurrency=1', '--fingerprints
 records = []
 
 
-def case(name, args, *, expected=0, targets=None, stdin='', base=True, files=None, check=None, held_stdin=False):
+def run_terminal(command, directory, width, stdout_terminal):
+    """Capture help through a real PTY, with one bounded process group."""
+    master, slave = pty.openpty()
+    process = None
+    deadline = time.monotonic() + 5
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, width, 0, 0))
+        with (directory / 'stdout.txt').open('wb') as stdout, (directory / 'stderr.txt').open('wb') as stderr:
+            process = subprocess.Popen(
+                command, cwd=directory,
+                stdin=subprocess.DEVNULL if stdout_terminal else slave,
+                stdout=slave if stdout_terminal else stdout, stderr=stderr,
+                start_new_session=True,
+            )
+            os.close(slave)
+            slave = None
+            if stdout_terminal:
+                # Drain while the child runs: a full PTY buffer must not turn a
+                # valid help page into a timeout. Linux reports PTY EOF as EIO.
+                with selectors.DefaultSelector() as ready:
+                    ready.register(master, selectors.EVENT_READ)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not ready.select(remaining):
+                            raise subprocess.TimeoutExpired(command, 5)
+                        try:
+                            chunk = os.read(master, 65536)
+                        except OSError as error:
+                            if error.errno == errno.EIO:
+                                break
+                            raise
+                        if not chunk:
+                            break
+                        stdout.write(chunk)
+            code = process.wait(timeout=max(0.001, deadline - time.monotonic()))
+    finally:
+        if process is not None:
+            # Also remove descendants on a failure before the child exits.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=5)
+        if slave is not None:
+            os.close(slave)
+        os.close(master)
+    return code, (directory / 'stdout.txt').read_bytes(), (directory / 'stderr.txt').read_bytes()
+
+
+def case(name, args, *, expected=0, targets=None, stdin='', base=True, files=None, check=None, held_stdin=False, terminal_width=None, stdout_terminal=True):
     directory = ROOT / 'cases' / f'{len(records)+1:03d}'
     directory.mkdir(parents=True, exist_ok=False)
     fixtures = {'targets.txt': TARGETS, 'captures.jsonl': CAPTURES, 'catalogue.json': '[]'}
@@ -57,7 +113,9 @@ def case(name, args, *, expected=0, targets=None, stdin='', base=True, files=Non
     code = None
     error = None
     try:
-        if held_stdin:
+        if terminal_width is not None:
+            code, stdout, stderr = run_terminal(command, directory, terminal_width, stdout_terminal)
+        elif held_stdin:
             with subprocess.Popen(command, cwd=directory, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
                 # communicate drains both output pipes while this duplicate
                 # keeps stdin open and empty: an accidental input read blocks.
@@ -114,7 +172,7 @@ for flag in value_flags:
     case(f'option as missing value {flag}', [flag, '--strict'], expected=1)
     case(f'delimiter as missing value {flag}', [flag, '--'], expected=1)
 
-for flag in ['--fast', '--baseline', '--no-generic', '--jsonl', '--strict', '--silent', '--no-colors', '--no-warning', '--debug', '--list', '--version']:
+for flag in ['--fast', '--deep', '--baseline', '--no-generic', '--jsonl', '--strict', '--silent', '--no-colors', '--no-animation', '--no-warning', '--debug', '--list', '--version']:
     for value in ['true', 'false', '']:
         case(f'bool argument {flag}={value}', [f'{flag}={value}'], expected=1)
 
@@ -141,6 +199,16 @@ case('terminal delimiter', ['--target=invalid://one', '--'], targets=['invalid:/
 case('positional after delimiter', ['--target=invalid://one', '--', 'invalid://two'], expected=1)
 case('flag after delimiter is positional', ['--', '--target=invalid://one'], expected=1)
 case('short valued flag consumes remainder', ['-c2tinvalid://one'], expected=1)
+
+# Quotes are valid literal filename characters when the format extension is
+# recognizable. A trailing quote *after* the extension must not silently
+# switch a JSON/JSONL-looking output into a TXT report.
+for filename in ['report.json"', '"report.json"', 'report.josnl']:
+    case('reject malformed report suffix ' + repr(filename),
+         ['--target=invalid://one', '--output', filename], expected=1,
+         check=lambda d,o,e,n=filename: require(
+             'unsupported --output extension' in e and not (d/n).exists(),
+             f'invalid suffix {n!r} was accepted or created an output file'))
 
 for spelling in ['--target-file', '--input', '-I']:
     case(f'file space form {spelling}', [spelling, 'targets.txt'], targets=['invalid://from-file-one', 'invalid://from-file-two'])
@@ -180,7 +248,8 @@ for flag, value in [('--browser', 'wrong'), ('--redirect-policy', 'wrong'), ('--
 for args in [
     ['--browser-path=missing'], ['--browser-timeout=30s'], ['--browser-settle=2s'], ['--save-screenshots=images'],
     ['--browser-allow-origin=https://fixture.invalid'], ['--journal-batch-size=1'], ['--fast', '--probe-concurrency=2'],
-    ['--baseline', '--probe-concurrency=2'], ['--fast', '--baseline'], ['--evidence-format=native'],
+    ['--baseline', '--probe-concurrency=2'], ['--fast', '--baseline'], ['--fast', '--deep'],
+    ['--deep', '--baseline'], ['--evidence=-', '--deep'], ['--deep', '--version'], ['--evidence-format=native'],
     ['--httpx-response-encoding=text'], ['--allow-origin=not-an-origin'],
 ]:
     case('invalid dependency ' + repr(args), ['--target=invalid://one', *args], expected=1)
@@ -196,7 +265,7 @@ for value in ['"Accept: text/plain, application/json"', '"X-Tag: say ""hello"""'
 for value in ['NoColon', '', 'X-Tag: first\nSecond: injected', '"X-Tag: unclosed']:
     case('invalid header '+repr(value), ['--target=invalid://one', '-H', value], expected=1)
 
-for filename in ['"report.json', 'report.json"', '"report.json"', 'a\\b.json', '--report.json', '-']:
+for filename in ['"report.json', 'report".json', '"report".json', 'a\\b.json', '--report.json', './-']:
     for form in [['-O', filename], ['-O='+filename], ['-O'+filename]]:
         # A leading-dash path must use an attached/equals value, or ./ prefix.
         if form == ['-O', filename] and filename.startswith('--'):
@@ -217,16 +286,42 @@ help_result = subprocess.run([str(BINARY), '--help'], capture_output=True, text=
 help_text = help_result.stdout
 help_normalized = ' '.join(help_text.split())
 help_checks = {
-    'groups': all(word+':' in help_text for word in ['Input', 'Detection', 'HTTP requests', 'Limits', 'Output', 'Browser', 'Information']),
+    'exit_zero': help_result.returncode == 0,
+    'stderr_empty': help_result.stderr == '',
+    'groups': all(word+':' in help_text for word in ['Input', 'Scan modes', 'Output', 'HTTP requests', 'Rate and concurrency', 'Evidence limits', 'Offline import and matching', 'Diagnostics and journals', 'Browser', 'Information']),
     'canonical_and_alias': '--target-file=FILE' in help_text and '--input=FILE' in help_text,
     'short_flags': all('-'+flag+',' in help_text for flag in ['t', 'I', 'O', 'H', 'c']),
-    'machine_output_boundary': '--jsonl' in help_text and '- is a literal file' in help_normalized,
+    'machine_output_boundary': '--jsonl' in help_text and '--output - is not stdout' in help_normalized and '--output ./-' in help_normalized,
     'default_timeout': '(default: 5s)' in help_text,
     'default_concurrency': '(default: 20)' in help_text,
-    'explicit_stdin': 'piped stdin supplies target URLs' in help_text,
+    'explicit_stdin': 'piped stdin supplies target URLs' in help_normalized,
     'exit_codes': all(code in help_text for code in ['Exit codes:', '  0 ', '  1 ', '  2 ', '  130 ']),
+    'tasks_before_reference': 0 <= help_text.find('wafmeow --target URL --fast') < help_text.find('--target=URL'),
+    'accurate_import_limit': 'live responses and httpx imports' in help_normalized,
+    'deadline_waits': 'including local rate/connection waits' in help_normalized,
+    'empty_and_strict_contracts': 'Empty input succeeds' in help_normalized and 'Matches alone do not fail' in help_normalized,
+    'capture_report_distinction': 'captures, not result reports' in help_normalized,
 }
+
+
+def check_terminal_help(directory, out, err, width):
+    require(not err, f'terminal help wrote stderr: {err!r}')
+    require(' '.join(out.split()) == help_normalized, 'terminal help lost or changed content')
+    for number, line in enumerate(out.splitlines(), 1):
+        require(len(line) <= width, f'help line {number} exceeds {width} columns ({len(line)}): {line}')
+    if width == 80:
+        require(out.splitlines() == help_text.splitlines(), '80-column terminal help differs from the 80-column pipe fallback')
+
+
+for width in [60, 80]:
+    for stdout_terminal in [True, False]:
+        placement = 'stdout PTY' if stdout_terminal else 'redirected stdout with stdin PTY'
+        case(f'help at {width} columns via {placement}', ['--help'], base=False,
+             terminal_width=width, stdout_terminal=stdout_terminal,
+             check=lambda d, o, e, w=width: check_terminal_help(d, o, e, w))
+
 (ROOT/'help.txt').write_text(help_text)
+(ROOT/'help-stderr.txt').write_text(help_result.stderr)
 summary = {
     'source_binary': str(SOURCE_BINARY), 'reviewed_binary_sha256': sha,
     'cases': len(records), 'passed': sum(item['passed'] for item in records),

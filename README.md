@@ -55,7 +55,7 @@ structured pipelines for teams that need to detect WAF at scale.
 - **Request, redirect and connection budgets.** Bound acquisition and apply
   explicit scope rules across redirects.
 - **An importable Go library.** Use the same evidence classifier in your own
-  application through the [v2 API](docs/library.md).
+  application through the [v3 API](docs/library.md).
 
 ### From discovery to JSONL
 
@@ -64,12 +64,12 @@ structured pipelines for teams that need to detect WAF at scale.
 set -o pipefail
 subfinder -d "${AUTHORIZED_DOMAIN:?set an authorized domain}" -silent |
   httpx -silent |
-  wafmeow --target-file - --baseline --jsonl --silent
+  wafmeow --target-file - --fast --jsonl --silent
 ```
 
-This pipeline sends normal HTTP requests with `--baseline`. Remove that flag
-only when the active probes are within your testing scope. For existing httpx
-response exports, use the [offline import pipeline](#projectdiscovery-httpx-pipelines).
+This pipeline uses `--fast` for a quick active scan of each discovered URL.
+For existing httpx response exports, use the
+[offline import pipeline](#projectdiscovery-httpx-pipelines).
 
 ## 1. Build
 
@@ -83,6 +83,12 @@ go build -o wafmeow ./cmd/wafmeow
 ./wafmeow --help
 ```
 
+Source checkouts show Go module/VCS identity; published release binaries
+show their exact release tag in `--version`, the human banner and JSON
+result provenance. The release workflow embeds that tag automatically and
+checks it before packaging. Installed binaries do not change versions
+until replaced by an update.
+
 For production, use a release that passes the [release validation gates](docs/releases.md#publication-gates).
 The v1.0.0 downloads predate the security hardening in this source tree.
 
@@ -90,34 +96,46 @@ Prebuilt binaries, the Go module and Homebrew install are in
 [Releases and installation](docs/releases.md#build-and-install):
 
 ```sh
-go install github.com/Lu1sDV/wafmeow/v2/cmd/wafmeow@latest
+go install github.com/Lu1sDV/wafmeow/v3/cmd/wafmeow@latest
 brew install Lu1sDV/tap/wafmeow
 ```
+
+The `/v3` Go install command requires a published v3 release. Before that
+release, build from the source checkout above; Homebrew continues installing the
+latest published stable version.
 
 ## 2. Scan an authorized target
 
 ```sh
 # Use your own local HTTP server on port 8080.
-./wafmeow --target http://127.0.0.1:8080 --baseline --jsonl
+./wafmeow --target http://127.0.0.1:8080 --fast
 ```
 
-Use `--target` / `-t` for a URL and repeat it for several URLs. Use
-`--target-file PATH` for a file of URL lines, or `--target-file -` for stdin.
+This prints a human-readable result. Use `--target` / `-t` for a URL and repeat
+it for several URLs. Use `--target-file PATH` for a file of URL lines, or
+`--target-file -` for stdin.
 `--input PATH` and `-I PATH` remain equivalent spellings of `--target-file PATH`.
 Choose one input source; saved responses use `--evidence` for offline analysis.
 
-`--baseline` sends a normal request; default active mode sends up to eight requests,
-and `--fast` selects three (normal, no-user-agent and the combined probe).
-Redirects remain subject to scope and request budgets. See
-[active probe payloads](docs/usage.md#active-probe-payloads) before enabling
-active mode against a target you do not own.
+| Goal | Choose | Collection |
+| --- | --- | --- |
+| Quick active fingerprinting | `--fast` | Normal, no-user-agent and combined probe |
+| Broader active probing | `--deep` | Eight selected request types; also the default when no mode is given |
+| Inspect normal responses only | `--baseline` | One normal request, without active probes |
+| Reuse saved responses | `--evidence FILE` | Offline classification, without new requests |
+
+`--baseline` can find fingerprints already present in an ordinary response. Use
+it when you want normal HTTP inspection without active probes; it is not a setup
+step for `--fast` or `--deep`. The three live modes are mutually exclusive, and
+redirects and budgets affect actual request counts. See
+[collection modes and payloads](docs/usage.md#collection-modes) for the trade-offs.
 
 ### ProjectDiscovery httpx pipelines
 
 ```sh
 # Discover URLs, then send new wafmeow requests:
 httpx -l authorized-hosts.txt -silent |
-  ./wafmeow --target-file - --baseline --jsonl --silent
+  ./wafmeow --target-file - --fast --jsonl --silent
 
 # Classify exported responses without additional requests:
 httpx -l authorized-hosts.txt -silent -json -irr -probe -rstr 1048576 -rsts 1048576 |
@@ -130,61 +148,61 @@ match. This is not equivalent to active acquisition or proof of WAF absence.
 Use `set -o pipefail` when upstream process failures must fail the shell pipeline.
 [Encoding, limitations, limits and downstream recipes](docs/usage.md#httpx-response-import).
 
-The Go library uses module **`github.com/Lu1sDV/wafmeow/v2`**. Result JSON uses
+The Go library uses module **`github.com/Lu1sDV/wafmeow/v3`**. Result JSON uses
 schema 1; module and report versions are separate contracts.
 
 ## 3. Automate and save results
 
 ```sh
 # targets.txt: one authorized URL per line.
-./wafmeow --target-file targets.txt --jsonl --output results.json --strict --rate 5
+./wafmeow --target-file targets.txt --fast --jsonl --output results.json --strict
 ```
 
-`--jsonl` streams results on stdout; `--output` / `-O` writes an atomic report
-whose extension selects JSON, JSONL, CSV or TXT. They can be used together.
-Human diagnostics go to stderr. `--strict` exits **2** after
-publishing results when evidence or browser capture is incomplete/failed/diagnosed.
-Configuration, input and output failures exit **1**; cancellation exits **130**.
+`--jsonl` streams results on stdout; `--output` / `-O` writes an atomic report.
+Use `.json`, `.jsonl`, `.ndjson`, `.csv` or `.txt` to choose its format;
+extensionless filenames select TXT and unknown suffixes fail early. Human diagnostics go to stderr. `--strict` checks evidence quality:
+it exits **2** after publishing incomplete, failed or diagnosed results, not
+merely because a WAF matched. Configuration, input and output failures exit **1**;
+cancellation exits **130**. Reports contain results, not replayable response
+captures. Add `--require-results` to fail an empty input stream without replacing
+an existing report. For safe `jq` filters, missing arrays, partial streams,
+report formats and exit semantics, start with the [JSONL pipeline guide](docs/jsonl.md).
+See also [output contracts](docs/usage.md#save-and-stream-results) and
+[rate and deadline tuning](docs/usage.md#rate-and-deadline-tuning).
 
 ## Benchmarks
 
-### Recorded live CLI comparison
+The broader-probe mode was labeled *full* in these historical measurements;
+it is now `--deep`. The figures below were not rerun for the rename.
 
-Median elapsed time for **2,000 authorized HTTPS targets**, with **three runs per
-configuration**, completed on 30 October 2026. Lower is better.
+Median elapsed time for **600 live HTTP/HTTPS targets** — 500 non-CDN plus 100
+known-CDN targets sampled from Tranco top 10,000 — with **three runs per
+configuration** on a **Hetzner Helsinki VPS** (4 vCPU, 7.6 GiB RAM), completed
+31 October 2026. Lower is better.
 
-**CPU:** Intel Core Ultra 9 275HX (4 logical CPUs allowed) · **RAM:** 32 GB.
+[Target selection, full VPS specifications, methodology, historical runs and
+offline conformance checks](docs/benchmarks.md).
 
-| Workers / processes | wafw00f 2.4.2 | <img src="assets/wafmeow.svg" width="20" height="20" alt=""> wafmeow fast | <img src="assets/wafmeow.svg" width="20" height="20" alt=""> wafmeow full | Speedup fast | Speedup full |
+| Workers / processes | wafw00f 2.4.2 | <img src="assets/wafmeow.svg" width="20" height="20" alt=""> wafmeow fast | <img src="assets/wafmeow.svg" width="20" height="20" alt=""> wafmeow deep | Speedup fast | Speedup deep |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 70m 27s | 29m 29s | 78m 05s | **2.39×** | 0.90× |
-| 5 | 15m 26s | 7m 27s | 14m 30s | **2.07×** | **1.06×** |
-| 10 | 7m 46s | 3m 48s | 7m 18s | **2.04×** | **1.07×** |
-| 50 | 3m 45s | 49s | 1m 40s | **4.55×** | **2.24×** |
-| 100 | 2m 45s | 28s | 1m 02s | **5.90×** | **2.66×** |
+| 1 | 31m 38s | 7m 49s | 15m 50s | **4.04×** | **2.00×** |
+| 5 | 6m 53s | 2m 18s | 3m 10s | **2.99×** | **2.17×** |
+| 10 | 4m 47s | 1m 16s | 1m 35s | **3.79×** | **3.03×** |
+| 50 | 1m 59s | 16.1s | 26.6s | **7.40×** | **4.49×** |
+| 100 | 1m 52s | 9.0s | 21.9s | **12.45×** | **5.12×** |
 
-**Detection results at 100 workers/processes** — targets out of 2,000, shown as
-the range across three runs.
+**Detection compared at 100 workers/processes** — targets out of 600, range
+across three runs.
 
-| Targets with… | wafw00f 2.4.2 | <img src="assets/wafmeow.svg" width="20" height="20" alt=""> wafmeow fast | <img src="assets/wafmeow.svg" width="20" height="20" alt=""> wafmeow full |
+| Targets with… | wafw00f 2.4.2 | <img src="assets/wafmeow.svg" width="20" height="20" alt=""> wafmeow fast | <img src="assets/wafmeow.svg" width="20" height="20" alt=""> wafmeow deep |
 | --- | ---: | ---: | ---: |
-| Named WAF match | 856–858 | 853–858 | 845–852 |
-| Generic WAF signal | 411–423 | 424–430 | 492–504 |
-| Returned result | 1,534–1,545 | 2,000 | 2,000 |
-| Complete evidence | Not reported | 1,437–1,460 | 1,368–1,410 |
+| Named WAF match | 155–157 | 157–158 | 157–160 |
+| Generic WAF signal | 121–126 | 118–120 | 145–146 |
+| Returned result | 580–581 | 600 | 600 |
+| Complete evidence | Not reported | 529–531 | 523–528 |
 
-Named matches and generic signals can overlap, including on incomplete results.
-Different probes, TLS policies and evidence completeness prevent an accuracy
-comparison. [Full results, methodology and build details](docs/benchmarks.md#live-cli-comparison).
-
-The 2,000-target table predates HTTP/1 probe reuse
-([ADR 0002](adrs/0002-http1-connection-reuse-for-probes.md)). At one worker, the
-reused-connection full build completed a **500-target median of 580.9 s** versus
-**874.6 s** for wafw00f 2.4.2 (1.51×); on the first 100 entries it was 96.4 s
-versus 143.3 s (1.49×) and 173.4 s for the fresh-connection build (44% less
-time). See the
-[connection-reuse comparison](docs/benchmarks.md#connection-reuse-comparison)
-for per-block accounting, paired A/B, scaling and controlled loopback results.
+Named and generic signals can overlap; these counts are not an accuracy comparison.
+[Detection semantics, transport checks and per-block accounting](docs/benchmarks.md#600-target-vps-comparison).
 
 ### Reproducible offline comparison
 
@@ -194,14 +212,14 @@ and binary hashes, compiler and Python package versions, CPU details, the exact
 synthetic corpus, repeated blocks and a verified result manifest. Workers replay
 saved responses with network access isolated by bubblewrap.
 
-The shipped synthetic fixtures have reviewed links for **28 of 172 products**;
+The shipped synthetic-conformance fixture links cover **29 of 172 products**;
 this checks conformance to fixture expectations. The live table measures
 end-to-end CLI elapsed time, while the offline comparison isolates saved-response
 classification. Keep each result attached to its workload and measured build.
 
 ## Major caveats
 
-- Scan only systems you own or are authorized to test. Default and fast modes are active.
+- Scan only systems you own or are authorized to test. Both `--deep` (default) and `--fast` send active probes.
 - A fingerprint match is evidence, not proof of WAF enforcement. No match is not proof of absence; incomplete is not negative.
 - Optional Chromium capture is not an OS-enforced network or resource sandbox.
 
@@ -210,6 +228,7 @@ classification. Keep each result attached to its workload and measured build.
 | Guide | Contents |
 | --- | --- |
 | [CLI usage](docs/usage.md) | Modes, headers, scope, byte limits and cancellation |
+| [JSONL pipelines](docs/jsonl.md) | Parsing results, filtering matches, output formats, exit handling and recovery |
 | [Moving from wafw00f](docs/migrating-from-wafw00f.md) | Common flag mappings, changed semantics and pipeline migration |
 | [Browser capture](docs/browser.md) | Chromium setup, screenshots and sanitized exports |
 | [Operations](docs/operations.md) | Result semantics, safe report consumption, deployment and soak checks |

@@ -11,14 +11,13 @@ import (
 	"math"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 
-	"github.com/Lu1sDV/wafmeow/v2/internal/atomicfile"
-	"github.com/Lu1sDV/wafmeow/v2/internal/httpmeta"
-	"github.com/Lu1sDV/wafmeow/v2/pkg/wafmeow"
+	"github.com/Lu1sDV/wafmeow/v3/internal/atomicfile"
+	"github.com/Lu1sDV/wafmeow/v3/internal/httpmeta"
+	"github.com/Lu1sDV/wafmeow/v3/pkg/wafmeow"
 	"github.com/jessevdk/go-flags"
 )
 
@@ -65,26 +64,38 @@ func run(args []string) int {
 }
 
 func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool, stdout, stderr io.Writer) int {
+	return runContextWithTerminal(ctx, args, stdin, piped, stdout, stderr, inspectBannerTerminal(stdout))
+}
+
+func runContextWithTerminal(ctx context.Context, args []string, stdin io.Reader, piped bool, stdout, stderr io.Writer, terminal bannerTerminal) int {
 	config := wafmeow.DefaultConfig()
 	opts := newOptions(config)
 	parser := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash)
 	parser.Name = "wafmeow"
-	parser.LongDescription = "Fingerprint WAFs from live targets or saved responses. Default live mode sends active probes.\nChoose --baseline for a normal request only, or --evidence for offline analysis.\nWith no explicit source, piped stdin supplies target URLs, one per line."
+	if requestsHelp(args) {
+		if err := writeHelp(stdout); err != nil {
+			fmt.Fprintln(stderr, terminalText(err.Error()))
+			return 1
+		}
+		return 0
+	}
 	positional, err := parser.ParseArgs(args)
 	if err != nil {
 		if flagErr, ok := err.(*flags.Error); ok && flagErr.Type == flags.ErrHelp {
-			if err := writeHelp(parser, stdout); err != nil {
+			if err := writeHelp(stdout); err != nil {
 				fmt.Fprintln(stderr, terminalText(err.Error()))
 				return 1
 			}
 			return 0
 		}
-		fmt.Fprintln(stderr, terminalText(err.Error()))
+		fmt.Fprintln(stderr, terminalText(withArgumentGuidance(parser, err).Error()))
 		return 1
 	}
 	console := colorizer(stdout, opts.NoColors)
 	diagnostics := colorizer(stderr, opts.NoColors)
+	var animation *bannerAnimation
 	fail := func(err error) int {
+		err = animation.join(err)
 		fmt.Fprintf(stderr, "%s %s\n", diagnostics.Bold(diagnostics.Red("ERROR")), terminalText(err.Error()))
 		if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			return 130
@@ -92,7 +103,7 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool,
 		return 1
 	}
 	if len(positional) != 0 {
-		return fail(fmt.Errorf("unexpected positional arguments: %q", positional))
+		return fail(fmt.Errorf("unexpected positional arguments: %q; URLs require --target URL (repeat for more) or --target-file FILE", positional))
 	}
 	if err := opts.normalizeInputs(); err != nil {
 		return fail(err)
@@ -104,7 +115,7 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool,
 		}
 	}
 	if len(args) == 0 && !piped {
-		if err := writeHelp(parser, stdout); err != nil {
+		if err := writeHelp(stdout); err != nil {
 			return fail(err)
 		}
 		return 0
@@ -188,8 +199,15 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool,
 		}
 	}
 	var report *humanReportSpool
+	reportPublished := false
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	abort := func() {
+		cancelRun()
+		closeInput()
+	}
 	finish := func(runErr error) int {
-		runErr = errors.Join(runErr, ctx.Err(), report.close())
+		runErr = errors.Join(animation.join(runErr), ctx.Err(), report.close())
 		if runErr != nil {
 			closeInput()
 			runErr = errors.Join(runErr, journal.diagnostic("run_error", runErr.Error()))
@@ -198,28 +216,37 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool,
 		runErr = errors.Join(runErr, artifacts.close())
 		runErr = errors.Join(runErr, ctx.Err())
 		if runErr != nil {
+			if reportPublished {
+				runErr = fmt.Errorf("%w; the named report was already published", runErr)
+			}
 			return fail(runErr)
 		}
 		return 0
 	}
-	report, err = openHumanReport(opts)
+	report, err = openHumanReport(opts, diagnostics)
 	if err != nil {
 		return finish(err)
 	}
-	if !opts.Silent && !opts.JSONL {
-		if err := printBanner(stdout, console); err != nil {
-			return finish(err)
-		}
+	if err := ctx.Err(); err != nil {
+		return finish(err)
+	}
+	plan := runPlanText(opts, config)
+	// Display the logo first, followed by the compact plan. Starting the
+	// timer only after the plan write avoids cross-stream redraw races.
+	animation, err = startScanBannerWithPlan(runCtx, stdout, opts, console, terminal, abort,
+		func() error { return writeRunPlan(stderr, plan) },
+		scanBannerPlanRows(terminal, stdout, stderr, plan))
+	if err != nil {
+		return finish(err)
 	}
 	var counts resultCounts
 	execute := func(writer io.Writer) error {
 		var output, stream *wafmeow.ResultWriter
 		if writer != nil {
-			format := strings.ToLower(filepath.Ext(opts.OutputFile))
-			if format != ".json" && format != ".jsonl" && format != ".csv" {
-				format = "txt"
+			format, err := reportFormat(opts.OutputFile)
+			if err != nil {
+				return err
 			}
-			var err error
 			output, err = wafmeow.NewResultWriter(writer, format)
 			if err != nil {
 				return err
@@ -236,9 +263,12 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool,
 		if opts.EvidenceFile != "" {
 			runner = wafmeow.RunCaptured
 		}
-		runCtx, cancelRun := context.WithCancel(ctx)
-		defer cancelRun()
 		sink := newJournalSink(journal, opts.JournalBatchSize, func(result wafmeow.Result) error {
+			// Results are already durable here. Join the animation before either
+			// stdout or stderr writes; both can refer to the same terminal.
+			if err := animation.stop(); err != nil {
+				return err
+			}
 			counts.add(result)
 			if err := report.add(result); err != nil {
 				return err
@@ -261,11 +291,9 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool,
 				return printResult(stdout, stderr, result, opts.SuppressWarnings, console, diagnostics)
 			}
 			return nil
-		}, func() {
-			cancelRun()
-			closeInput()
-		})
+		}, abort)
 		emit := func(result wafmeow.Result) error {
+			animation.requestStop()
 			if opts.EvidenceFile == "" {
 				addInputFormatHint(&result)
 			}
@@ -279,8 +307,16 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool,
 		} else {
 			runErr = runner(runCtx, engine, input, config, emit)
 		}
+		runErr = withCaptureInputGuidance(opts, runErr)
 		// Join the journal owner before finalizing reports or writing diagnostics.
-		err := errors.Join(sink.close(), runErr)
+		sinkErr := sink.close()
+		if errors.Is(runErr, sinkErr) {
+			sinkErr = nil
+		}
+		err := animation.join(errors.Join(sinkErr, runErr))
+		if err == nil && opts.RequireResults && counts.Total == 0 {
+			err = errors.New("no targets were processed; --require-results needs at least one nonblank input record")
+		}
 		if err == nil && output != nil {
 			err = output.Close()
 		}
@@ -291,10 +327,17 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool,
 	}
 	if opts.OutputFile != "" {
 		err = atomicfile.Write(opts.OutputFile, execute)
+		reportPublished = err == nil
+		if err != nil {
+			err = fmt.Errorf("%w; final report not replaced (previous report preserved); streamed JSONL may be partial", err)
+		}
 	} else {
 		err = execute(nil)
 	}
 	printFinal := func(finished bool) error {
+		// finish owns any animation error; settle before writing even the
+		// partial overview on an input or output failure.
+		_ = animation.stop()
 		if opts.Silent {
 			return nil
 		}
@@ -318,79 +361,66 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, piped bool,
 	return 0
 }
 
-func writeHelp(parser *flags.Parser, writer io.Writer) error {
-	var help bytes.Buffer
-	parser.WriteHelp(&help)
-	help.WriteString(`
-Examples:
-  wafmeow --target https://example.com --baseline --jsonl
-  wafmeow --target-file targets.txt --jsonl --silent
-  httpx -silent < authorized-hosts.txt | wafmeow --target-file - --jsonl
-  wafmeow --evidence captures.jsonl --jsonl
-  wafmeow --target-file targets.txt --output results.json --strict
-
-Live HTTP controls do not change offline acquisition: --evidence sends no requests.
-Use --jsonl for structured stdout; --output writes a named file independently.
-Only target URLs are accepted on implicit stdin; saved responses need --evidence -.
-
-Exit codes:
-  0  Completed; inspect result states, or use --strict to fail on incomplete results.
-  1  Invalid configuration, input failure or output failure.
-  2  --strict found failed, incomplete or diagnosed results; reports are published first.
-  130  Cancelled by SIGINT or SIGTERM.
-`)
-	_, err := help.WriteTo(writer)
-	return err
-}
-
 func validateOptions(opts options) error {
 	switch opts.EvidenceFormat {
 	case "", "native", "httpx":
 	default:
-		return fmt.Errorf("unknown evidence format %q; choose native or httpx", opts.EvidenceFormat)
+		return fmt.Errorf("unknown evidence format %q for --evidence-format; choose native or httpx", opts.EvidenceFormat)
 	}
 	switch opts.HTTPXResponseEncoding {
 	case "", "text", "base64":
 	default:
-		return fmt.Errorf("unknown httpx response encoding %q; choose text or base64", opts.HTTPXResponseEncoding)
+		return fmt.Errorf("unknown response encoding %q for --httpx-response-encoding; choose text or base64", opts.HTTPXResponseEncoding)
 	}
 	if opts.Concurrency <= 0 || opts.Concurrency > wafmeow.MaxConcurrency {
 		return fmt.Errorf("--concurrency must be between 1 and %d", wafmeow.MaxConcurrency)
 	}
-	if opts.MaxBodyBytes <= 0 || opts.MaxRequests <= 0 {
-		return errors.New("decoded body limit and request budget must be positive")
+	if opts.MaxBodyBytes <= 0 {
+		return errors.New("--max-body-bytes must be positive")
+	}
+	if opts.MaxRequests <= 0 {
+		return errors.New("--max-requests must be positive")
 	}
 	if opts.MaxConnections < 0 {
-		return errors.New("connection limit must not be negative")
+		return errors.New("--max-connections must not be negative; 0 selects the automatic connection limit")
 	}
 	if opts.ProbeConcurrency < 1 || opts.ProbeConcurrency > 8 {
-		return errors.New("probe concurrency must be between 1 and 8")
+		return errors.New("--probe-concurrency must be between 1 and 8")
 	}
 	if opts.JournalBatchSize < 1 || opts.JournalBatchSize > maxJournalBatchSize {
-		return fmt.Errorf("journal batch size must be between 1 and %d", maxJournalBatchSize)
+		return fmt.Errorf("--journal-batch-size must be between 1 and %d", maxJournalBatchSize)
 	}
-	if opts.MaxResponseHeaderBytes < 0 || opts.MaxTargetEvidenceBytes < 0 {
-		return errors.New("response header and retained evidence limits must not be negative")
+	if opts.MaxResponseHeaderBytes < 0 {
+		return errors.New("--max-response-header-bytes must not be negative; 0 selects the default limit")
 	}
-	if opts.RequestTimeout <= 0 || opts.TargetTimeout <= 0 {
-		return errors.New("request and target timeouts must be positive")
+	if opts.MaxTargetEvidenceBytes < 0 {
+		return errors.New("--max-target-evidence-bytes must not be negative; 0 selects the default limit")
+	}
+	if opts.RequestTimeout <= 0 {
+		return errors.New("--request-timeout must be a positive duration, such as 5s")
+	}
+	if opts.TargetTimeout <= 0 {
+		return errors.New("--target-timeout must be a positive duration, such as 30s")
 	}
 	if opts.MaxRedirects < 0 {
-		return errors.New("maximum redirects must not be negative")
+		return errors.New("--max-redirects must not be negative; 0 follows none")
 	}
-	for _, rate := range []float64{opts.Rate, opts.PerOriginRate} {
-		if math.IsNaN(rate) || math.IsInf(rate, 0) || rate < 0 {
-			return errors.New("request rates must be finite and nonnegative")
+	for _, rate := range []struct {
+		name  string
+		value float64
+	}{{"rate", opts.Rate}, {"per-origin-rate", opts.PerOriginRate}} {
+		if math.IsNaN(rate.value) || math.IsInf(rate.value, 0) || rate.value < 0 {
+			return fmt.Errorf("--%s must be finite and nonnegative; 0 disables pacing", rate.name)
 		}
 	}
 	switch opts.RedirectPolicy {
 	case "canonical-host", "same-origin", "none":
 	case "allowlist":
 		if len(opts.AllowedOrigins) == 0 {
-			return errors.New("allowlist redirect policy requires --allow-origin")
+			return errors.New("--redirect-policy=allowlist requires --allow-origin")
 		}
 	default:
-		return fmt.Errorf("unknown redirect policy %q", opts.RedirectPolicy)
+		return fmt.Errorf("unknown --redirect-policy %q; choose canonical-host, same-origin, none or allowlist", opts.RedirectPolicy)
 	}
 	if opts.Target != "" && strings.TrimSpace(opts.Target) == "" {
 		return errors.New("--target must not be blank")
@@ -398,14 +428,22 @@ func validateOptions(opts options) error {
 	if opts.Target != "" && opts.InputFile != "" {
 		return errors.New("--target and --target-file (or --input / -I) are mutually exclusive")
 	}
-	if opts.EvidenceFile != "" && (opts.Target != "" || opts.InputFile != "" || opts.FastMode || opts.BaselineOnly || len(opts.Headers) != 0) {
-		return errors.New("--evidence is exclusive with --target, --target-file (or --input / -I), --fast, --baseline and --header")
+	if opts.EvidenceFile != "" && (opts.Target != "" || opts.InputFile != "" || opts.FastMode || opts.DeepMode || opts.BaselineOnly || len(opts.Headers) != 0) {
+		return errors.New("--evidence is exclusive with --target, --target-file (or --input / -I), --fast, --deep, --baseline and --header")
 	}
-	if opts.FastMode && opts.BaselineOnly {
-		return errors.New("--fast is active and cannot be combined with --baseline")
+	if opts.FastMode && opts.DeepMode {
+		return errors.New("--fast and --deep are mutually exclusive")
+	}
+	if opts.BaselineOnly && (opts.FastMode || opts.DeepMode) {
+		return errors.New("--baseline cannot be combined with --fast or --deep")
+	}
+	if opts.OutputFile != "" {
+		if _, err := reportFormat(opts.OutputFile); err != nil {
+			return err
+		}
 	}
 	if opts.ListWAFS || opts.Version {
-		if opts.ListWAFS && opts.Version || opts.JSONL || opts.Target != "" || opts.InputFile != "" || opts.EvidenceFile != "" || opts.OutputFile != "" || opts.JournalFile != "" || opts.FastMode || opts.BaselineOnly {
+		if opts.ListWAFS && opts.Version || opts.RequireResults || opts.JSONL || opts.Target != "" || opts.InputFile != "" || opts.EvidenceFile != "" || opts.OutputFile != "" || opts.JournalFile != "" || opts.FastMode || opts.DeepMode || opts.BaselineOnly {
 			return errors.New("--list and --version cannot be combined with scanning or output options")
 		}
 	}
@@ -430,13 +468,16 @@ func parseHeaders(values []string) ([]wafmeow.Header, error) {
 		reader.TrimLeadingSpace = true
 		fields, err := reader.Read()
 		if err != nil {
-			return nil, errors.New("--header requires CSV-quoted fields when values contain commas or quotes")
+			return nil, errors.New(headerCSVRecovery)
 		}
 		for _, field := range fields {
 			name, content, ok := strings.Cut(field, ":")
 			name, content = strings.Trim(name, " \t"), strings.Trim(content, " \t")
 			if !ok || !httpmeta.ValidHeaderName(name) || !httpmeta.ValidHeaderValue(content) {
-				return nil, errors.New("--header requires valid Name: value entries")
+				if !ok && len(fields) > 1 {
+					return nil, errors.New(headerCSVRecovery)
+				}
+				return nil, errors.New("--header requires valid Name: value entries; for example, -H 'X-Tag: demo' in a POSIX shell")
 			}
 			headers = append(headers, wafmeow.Header{Name: name, Value: content})
 		}

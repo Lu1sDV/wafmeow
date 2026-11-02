@@ -9,7 +9,7 @@ on `main`. Leave **bump** as `patch` and both **version** and **tag** empty for 
 normal fix release.
 The workflow chooses the next version, creates its annotated tag, runs all release
 gates, publishes the GitHub archives and GHCR images, and updates the Homebrew tap.
-For example, after `v2.0.0`, the default selection is `v2.0.1`.
+For example, after `v3.0.0`, the default selection is `v3.0.1`.
 
 The same action is available from an authenticated GitHub CLI:
 
@@ -17,29 +17,32 @@ The same action is available from an authenticated GitHub CLI:
 gh workflow run release.yml --repo Lu1sDV/wafmeow --ref main -f bump=patch
 ```
 
-Choose `minor` for compatible features or `major` for an incompatible release;
-the numbers are calculated from the highest published stable version. Drafts
+For the initial v3 release after this migration merges, select **major** from
+the latest published v2 stable version (or set **version** to `v3.0.0`).
+This starts the release workflow; merging the PR alone does not publish v3.
+Choose `minor` for later compatible features or `major` for another incompatible
+release; increments are calculated from the highest published stable version. Drafts
 and prereleases do not change that baseline. A major bump must already agree
 with the candidate's Go module path. This is an explicit release policy, not
 an attempt to infer compatibility from commit messages.
 
 ### Choose an exact version
 
-To choose the number yourself, enter a **new** version such as `v2.0.5` in
+To choose the number yourself, enter a **new** version such as `v3.0.5` in
 **version**, leave **tag** empty, and click **Run workflow** on `main`.
 **version** overrides **bump**. The workflow creates that exact tag and runs the
 same validation, GitHub release, GHCR and stable Homebrew delivery steps; there
 is no release PR, version-file commit, or local tag command.
 
 ```sh
-gh workflow run release.yml --repo Lu1sDV/wafmeow --ref main -f version=v2.0.5
+gh workflow run release.yml --repo Lu1sDV/wafmeow --ref main -f version=v3.0.5
 ```
 
 | Intent | bump | version | tag |
 | --- | --- | --- | --- |
 | Next patch automatically | `patch` | empty | empty |
-| Choose a new stable version | ignored | `v2.0.5` | empty |
-| Choose a new prerelease | ignored | `v2.1.0-rc.1` | empty |
+| Choose a new stable version | ignored | `v3.0.5` | empty |
+| Choose a new prerelease | ignored | `v3.1.0-rc.1` | empty |
 | Recover an existing candidate | ignored | empty | existing tag |
 
 Use canonical `vMAJOR.MINOR.PATCH[-PRERELEASE]` syntax, including the leading `v`,
@@ -47,12 +50,13 @@ without whitespace or build metadata. A new version must be greater than the
 highest published stable release, agree with the source's Go module major, and
 have no existing tag or release (including a draft). Selecting both **version**
 and **tag** is rejected before credential preflight or tag creation. With the
-current `/v2` module, `v3.0.0` requires a module migration first.
+current `/v3` module, only `v3.*` candidates are valid; tags from v2 cannot
+be released from this source.
 
 An exact prerelease publishes its archives and the configured GHCR channel but
 does not become latest or update the stable Homebrew formula. After a custom
-stable version such as `v2.0.5` is published, the next automatic patch is
-`v2.0.6`, not `v2.0.1`. A rerun recovers only the exact version and source owned
+stable version such as `v3.0.5` is published, the next automatic patch is
+`v3.0.6`, not `v3.0.1`. A rerun recovers only the exact version and source owned
 by its original workflow run; it never substitutes another version.
 
 The source SHA is fixed when you click **Run workflow**. A new release requires
@@ -137,6 +141,31 @@ go build -o wafmeow ./cmd/wafmeow
 ./wafmeow --help
 ```
 
+### Version identity
+
+The release workflow first freezes the source commit and selects the exact
+`vMAJOR.MINOR.PATCH[-PRERELEASE]` tag. Every native release build then injects
+that selected tag through Go's linker `-X` flag. Consequently, a binary
+released as `v3.0.3` prints `wafmeow v3.0.3` from `--version`, shows
+`v3.0.3` in its human banner, and records the same version in
+`provenance.program_version` for JSON results. No version file, hand-edited
+constant, runtime GitHub lookup, or background update is involved.
+
+On **each native runner**, packaging executes the binary and requires its
+`--version` output to equal the selected tag **exactly**; mismatches stop
+publication before an archive is written. The verified release manifest
+also records `program_version` alongside binary hashes, source revision
+and compiler identity, and the extracted-archive/container smoke tests require
+the same tag. The full Git commit remains independently traceable through
+verified Go build VCS metadata and the manifest; it is no longer appended
+to the user-facing version of release binaries.
+
+Ordinary source builds use the existing module/VCS-derived version
+(`devel` with a revision when available). Module installs made with
+`go install ...@version` continue to use Go's embedded module version.
+An already installed binary reports **its own** build version; updating
+a GitHub release does not rewrite existing binaries.
+
 ### Release archives
 
 [GitHub Releases](https://github.com/Lu1sDV/wafmeow/releases) is the binary
@@ -163,10 +192,10 @@ production deployment requires a newly built, scanned release that passes the
 
 ### Install a published Go module
 
-The library and CLI use the v2 module path. Once a v2 release is published:
+The library and CLI use the v3 module path. Once a v3 release is published:
 
 ```sh
-go install github.com/Lu1sDV/wafmeow/v2/cmd/wafmeow@latest
+go install github.com/Lu1sDV/wafmeow/v3/cmd/wafmeow@latest
 ```
 
 This command installs published module versions, not unreleased source. Use the
@@ -187,8 +216,11 @@ brew install Lu1sDV/tap/wafmeow
 ```
 
 Stable delivery verifies the formula and archive hashes against the published
-GitHub assets, runs `brew audit --strict --online`, installs the fresh formula
-and runs `brew test` on macOS before updating only `Formula/wafmeow.rb` in the tap.
+GitHub assets, copies the verified formula into the local tap, then grants
+[formula-scoped trust](https://docs.brew.sh/Tap-Trust) with
+`brew trust --formula Lu1sDV/tap/wafmeow` before `brew audit --strict --online`.
+It installs the fresh formula and runs `brew test` on macOS before updating only
+`Formula/wafmeow.rb` in the tap.
 The update checks the existing blob SHA to detect concurrent edits, rejects
 downgrades and unexpected formula changes, and accepts an already identical
 formula on retry. Until that job succeeds, `brew install` can still serve the
@@ -307,6 +339,33 @@ before that fix, including v2.0.0, carry no registry attestation: verify those b
 matching the digest to the release run's `published-container-identity` artifact and
 the container binary hash to `manifest.json`.
 
+## Pull request checks
+
+The [CI workflow](../.github/workflows/ci.yml) runs for pull requests and pushes to
+`main`. Release validation also calls it with the frozen candidate SHA.
+
+| Jobs | What runs |
+| --- | --- |
+| `check (1.26.10)` and `check (1.27.3)` | Every package's applicable Go tests with the race detector and statement coverage, formatting, vet and Python helper tests |
+| `check (1.27.3)` additions | Source/dependency vulnerability scans, three bounded fuzz targets, pinned real-httpx pipelines, CLI argument and terminal-help checks, isolated detector comparison, and container smoke |
+| `Local Chromium integration` | Linux browser tests enabled with `browser_integration`, a required installed native browser, and the race detector |
+| Five `Native PR test and archive smoke` jobs | All applicable Go tests, a native build, and extracted-archive smoke on Linux x64/ARM64, macOS Intel/Apple silicon, and Windows x64; Linux also tests native containers |
+
+`go test ./...` discovers tests in every package of this module. File suffixes,
+build tags and the platform select which tests can run in each job. The full
+race and native suites use `-count=1` so cached successes do not replace execution
+on the current runner. Browser tests need their separate tagged command. The
+ordinary suite executes fuzz seeds; explicit fuzz steps generate additional
+inputs for bounded periods. Python, CLI subprocess, archive and container checks
+are separate workflow steps, not part of Go's test discovery.
+
+Green checks establish that these cases passed on the tested source and runners.
+They do not establish exhaustive input coverage or real-world detector accuracy.
+Statement coverage is reported without a percentage gate; reviewed capture
+coverage and synthetic catalogue conformance are different measures. See
+[benchmark scope](benchmarks.md). Availability/import and matcher fuzz failures
+retain their reproducing corpus entries for investigation.
+
 ## Publication gates
 
 The [release workflow](../.github/workflows/release.yml) creates or resolves the
@@ -316,7 +375,7 @@ requested tag once and validates that exact commit before publication:
 | --- | --- |
 | Source validation | Formatting, vet, race tests, Go source and optional Python dependency vulnerability scans, bounded matcher and evidence fuzzing, isolated offline comparison, httpx pipeline checks, Chromium integration, and container checks |
 | Native packages | Tests and extracted-archive smoke checks on Linux x64/ARM64, macOS x64/ARM64, and Windows x64 |
-| Binary identity | Packaged binaries identify the prepared source SHA, an unmodified tree, the intended target, and Go 1.27.3 |
+| Binary identity | Native packages must report exactly `wafmeow <release-tag>` from `--version`; the frozen source SHA, unmodified tree, target and Go 1.27.3 are independently verified, with `program_version` bound to each binary hash in the manifest |
 | Artifact verification | Binary vulnerability scans, verified hashes and identities in `manifest.json`, and `SHA256SUMS` covering the manifest and generated Homebrew formula |
 | Containers | Native x64/ARM64 build and hardened offline smoke of the exact archived binaries; GHCR writes occur only after successful archive publication and explicit repository opt-in |
 | Publication | Attestation, remote tag and hash rechecks, and no asset overwrite |
@@ -328,8 +387,8 @@ committed candidate; local cross-builds do not establish native runtime behavior
 
 Tags use `vMAJOR.MINOR.PATCH[-PRERELEASE]` without build metadata. The tag's major
 version must agree with `go.mod` at the frozen candidate SHA, including when a
-manual dispatch runs from another checkout. This source uses `/v2`, so its
-release tags must be `v2.*`; CI derives its synthetic smoke tag from the module.
+manual dispatch runs from another checkout. This source uses `/v3`, so its
+release tags must be `v3.*`; CI derives its synthetic smoke tag from the module.
 Prereleases do not become latest, and older stable releases cannot replace a higher stable
 release as latest. Cross-tag publication is serialized without cancelling
 in-progress publication.
@@ -341,6 +400,13 @@ review of the latest push, stale-review dismissal, and resolved conversations.
 Apply checks to administrators too, and prohibit force-pushes and branch deletion.
 Protect `v*` tags against updates/deletion without bypass actors; enable immutable
 releases before publication.
+
+The required status-check names must include both `check` versions,
+`Local Chromium integration`, and all five native matrix entries: `linux/amd64`,
+`linux/arm64`, `darwin/amd64`, `darwin/arm64`, and `windows/amd64`, each named
+`Native PR test and archive smoke (OS/ARCH)`. A successful workflow definition
+does not make a job mandatory for merging; update repository protection when
+the platform matrix changes.
 
 Default Actions tokens should be read-only and unable to approve pull requests.
 The tag preparation and archive publication jobs explicitly request `contents: write`; only the
@@ -363,8 +429,9 @@ Findings and audit errors fail validation, and reports are retained for review.
 
 A source fix does not clear findings in an already published binary. Rebuild,
 scan, validate, and publish a new release; deploy the new artifact rather than
-assuming a source update repairs existing downloads. The current `/v2` source
-must supersede v1.0.0 through a new validated `v2.*` release. Do not replace or
-overwrite the old tag or its assets. Until that release is published, use a
-reviewed source revision built with the patched toolchain above.
+assuming a source update repairs existing downloads. The `/v3` source must be
+published as a newly validated `v3.*` release; existing v1 and v2 archives remain
+historical, and their tags or assets must not be overwritten. Until the new
+release is published, use a reviewed source revision built with the patched
+toolchain above.
 
