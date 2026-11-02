@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -408,7 +409,8 @@ func TestScanBannerKeepsPlanBelowAnimatedLogo(t *testing.T) {
 		time.Sleep(logoInterval)
 		synctest.Wait()
 		redraw, _ := writer.snapshot()
-		if !strings.Contains(redraw, "\x1b[14A") || !strings.Contains(redraw, "\x1b[1B") {
+		if !strings.Contains(redraw, fmt.Sprintf("\x1b[%dA", logoRows+footerRows)) ||
+			!strings.Contains(redraw, fmt.Sprintf("\x1b[%dB", footerRows)) {
 			t.Fatalf("redraw did not preserve the plan's cursor rows: %q", redraw)
 		}
 		if err := animation.stop(); err != nil {
