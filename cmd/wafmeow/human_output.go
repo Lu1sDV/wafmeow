@@ -188,11 +188,16 @@ func humanResultExplanation(result wafmeow.Result, scopeRedirects int) string {
 	}
 
 	truncated := 0
+	for _, e := range result.Evidence {
+		if e.BodyTruncated {
+			truncated++
+		}
+	}
 	timeoutOrFailure := 0
 	for _, d := range result.Outcome.Diagnostics {
 		switch d.Code {
 		case "body_truncated":
-			truncated++
+			// Already counted from the observation to avoid duplicate diagnostics.
 		case "redirect_scope":
 			// Reported separately above.
 		default:
