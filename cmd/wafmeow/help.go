@@ -106,7 +106,7 @@ Examples:
 	for _, paragraph := range []string{
 		"Use --jsonl for machine-readable stdout without --silent. --output independently publishes a named report: .json, .jsonl/.ndjson, .csv or .txt; no extension means TXT. Unknown extensions fail. --output - is not stdout; use --jsonl or --output ./- for a literal filename.",
 		"--evidence reads response captures, not result reports written by --output. Choose native captures or --evidence-format=httpx exports. Live request controls do not enable offline acquisition.",
-		"--strict checks evidence quality; matches alone do not fail. Empty input succeeds, even with --strict. Use --require-results to reject zero processed targets with exit 1 before a named report is published. Nonzero exit does not mean no output was published.",
+		"--strict checks evidence quality. Matches alone do not fail. Empty input succeeds, even with --strict. Use --require-results to reject zero processed targets with exit 1 before a named report is published. Nonzero exit does not mean no output was published.",
 		"Rate and connection waits consume request and target deadlines. When lowering --rate, also review --concurrency and both timeouts. HTTP and browser deadlines are separate.",
 	} {
 		helpParagraph(&help, width, "  ", paragraph)
