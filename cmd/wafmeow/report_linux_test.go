@@ -101,7 +101,7 @@ func TestCLICancellationUnblocksInheritedReportPipe(t *testing.T) {
 					_ = cmd.Wait()
 					t.Fatalf("final table heading: %v", err)
 				}
-				if strings.HasPrefix(line, "--------|") {
+				if strings.HasPrefix(line, "---------|") {
 					break
 				}
 			}
