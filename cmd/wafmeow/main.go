@@ -11,7 +11,6 @@ import (
 	"math"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -200,6 +199,7 @@ func runContextWithTerminal(ctx context.Context, args []string, stdin io.Reader,
 		}
 	}
 	var report *humanReportSpool
+	reportPublished := false
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 	abort := func() {
@@ -216,6 +216,9 @@ func runContextWithTerminal(ctx context.Context, args []string, stdin io.Reader,
 		runErr = errors.Join(runErr, artifacts.close())
 		runErr = errors.Join(runErr, ctx.Err())
 		if runErr != nil {
+			if reportPublished {
+				runErr = fmt.Errorf("%w; the named report was already published", runErr)
+			}
 			return fail(runErr)
 		}
 		return 0
@@ -240,11 +243,10 @@ func runContextWithTerminal(ctx context.Context, args []string, stdin io.Reader,
 	execute := func(writer io.Writer) error {
 		var output, stream *wafmeow.ResultWriter
 		if writer != nil {
-			format := strings.ToLower(filepath.Ext(opts.OutputFile))
-			if format != ".json" && format != ".jsonl" && format != ".csv" {
-				format = "txt"
+			format, err := reportFormat(opts.OutputFile)
+			if err != nil {
+				return err
 			}
-			var err error
 			output, err = wafmeow.NewResultWriter(writer, format)
 			if err != nil {
 				return err
@@ -312,6 +314,9 @@ func runContextWithTerminal(ctx context.Context, args []string, stdin io.Reader,
 			sinkErr = nil
 		}
 		err := animation.join(errors.Join(sinkErr, runErr))
+		if err == nil && opts.RequireResults && counts.Total == 0 {
+			err = errors.New("no targets were processed; --require-results needs at least one nonblank input record")
+		}
 		if err == nil && output != nil {
 			err = output.Close()
 		}
@@ -322,6 +327,10 @@ func runContextWithTerminal(ctx context.Context, args []string, stdin io.Reader,
 	}
 	if opts.OutputFile != "" {
 		err = atomicfile.Write(opts.OutputFile, execute)
+		reportPublished = err == nil
+		if err != nil {
+			err = fmt.Errorf("%w; final report not replaced (previous report preserved); streamed JSONL may be partial", err)
+		}
 	} else {
 		err = execute(nil)
 	}
@@ -428,8 +437,13 @@ func validateOptions(opts options) error {
 	if opts.BaselineOnly && (opts.FastMode || opts.DeepMode) {
 		return errors.New("--baseline cannot be combined with --fast or --deep")
 	}
+	if opts.OutputFile != "" {
+		if _, err := reportFormat(opts.OutputFile); err != nil {
+			return err
+		}
+	}
 	if opts.ListWAFS || opts.Version {
-		if opts.ListWAFS && opts.Version || opts.JSONL || opts.Target != "" || opts.InputFile != "" || opts.EvidenceFile != "" || opts.OutputFile != "" || opts.JournalFile != "" || opts.FastMode || opts.DeepMode || opts.BaselineOnly {
+		if opts.ListWAFS && opts.Version || opts.RequireResults || opts.JSONL || opts.Target != "" || opts.InputFile != "" || opts.EvidenceFile != "" || opts.OutputFile != "" || opts.JournalFile != "" || opts.FastMode || opts.DeepMode || opts.BaselineOnly {
 			return errors.New("--list and --version cannot be combined with scanning or output options")
 		}
 	}
