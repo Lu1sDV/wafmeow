@@ -179,8 +179,11 @@ Native records have a 16 MiB serialized limit, 64 observations, and at most
 enforces collection limits before decoding an excess element; these limits do
 not change direct `Evidence` JSON unmarshalling or the `Classify` API.
 Readers, injected clients/transports, and writers remain caller-owned. `Run`
-closes idle connections on the transport it creates before returning; a
-caller-supplied transport is never closed. Blocking input needs
+gracefully closes idle connections on the transport it creates before
+returning; shutdown is bounded and force-closes remaining sockets after a short
+grace or caller cancellation. The cancellation state observed after cleanup is
+returned, so a deadline that expires while connections close is not reported as
+success. A caller-supplied transport is never closed. Blocking input needs
 `Config.CancelInput` or another caller-provided wakeup; callbacks and
 transports must honor cancellation and return. After successful configuration
 validation, cancellation invokes `CancelInput` once, including when the supplied
