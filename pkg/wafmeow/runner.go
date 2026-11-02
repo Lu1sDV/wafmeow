@@ -172,7 +172,7 @@ func Run(ctx context.Context, engine *Engine, inputs io.Reader, config Config, e
 }
 
 func run(ctx context.Context, engine *Engine, inputs io.Reader, config Config, emit func(Result) error,
-	capture func(context.Context, string, string, uint64, Config) browserCapture) error {
+	capture func(context.Context, string, string, uint64, Config) browserCapture) (err error) {
 	if ctx == nil || engine == nil || inputs == nil || emit == nil {
 		return errors.New("context, engine, inputs, and result callback are required")
 	}
@@ -195,6 +195,9 @@ func run(ctx context.Context, engine *Engine, inputs io.Reader, config Config, e
 		wakeInput()
 		return err
 	}
+	// Registered first so it runs after cleanup and input-wake defers; a
+	// deadline that expires during cleanup must not be reported as success.
+	defer func() { err = errors.Join(err, ctx.Err()) }()
 	workCtx, cancel := context.WithCancel(ctx)
 	inputWoken := make(chan struct{})
 	stopWake := context.AfterFunc(workCtx, func() {
@@ -209,7 +212,7 @@ func run(ctx context.Context, engine *Engine, inputs io.Reader, config Config, e
 	}()
 	policy := newOutboundPolicy(config)
 	if policy.ownedTransport != nil {
-		defer policy.ownedTransport.CloseIdleConnections()
+		defer closeOwnedTransport(ctx, policy.ownedTransport, policy.ownedConns)
 	}
 	type targetWork struct {
 		target     string
@@ -297,7 +300,7 @@ func run(ctx context.Context, engine *Engine, inputs io.Reader, config Config, e
 		<-browserDone
 	}
 	close(results)
-	return errors.Join(inputErr, <-sinkErrors, ctx.Err())
+	return errors.Join(inputErr, <-sinkErrors)
 }
 
 func classifyTarget(ctx context.Context, engine *Engine, target string, config Config, policy *outboundPolicy) Result {

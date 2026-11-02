@@ -98,6 +98,9 @@ type outboundPolicy struct {
 	// ownedTransport is the run-local transport created here; nil when the
 	// caller supplied one. Only an owned transport is closed after a Run.
 	ownedTransport *http.Transport
+	// ownedConns owns the sockets dialed by ownedTransport; nil with a
+	// caller-supplied transport.
+	ownedConns *ownedConnections
 }
 
 type originCooldown struct {
@@ -139,7 +142,8 @@ func newOutboundPolicy(config Config) *outboundPolicy {
 			// paces it. Guarded writes prevent a refused retry from being sent
 			// even if cancellation races with selecting an idle connection.
 			transport.DisableKeepAlives = false
-			guardOwnedConnections(transport)
+			p.ownedConns = newOwnedConnections()
+			guardOwnedConnections(transport, p.ownedConns)
 			transport.MaxResponseHeaderBytes = config.MaxResponseHeaderBytes
 			transport.Protocols = new(http.Protocols)
 			transport.Protocols.SetHTTP1(true)

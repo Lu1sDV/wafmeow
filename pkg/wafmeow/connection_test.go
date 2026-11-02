@@ -200,3 +200,20 @@ func TestOwnedTransportCustomTLSDialerRetainsFreshVerifiedConnections(t *testing
 		}
 	}
 }
+
+func TestOwnedConnectionsRefuseLateDialAfterShutdown(t *testing.T) {
+	owned := newOwnedConnections()
+	client, server := net.Pipe()
+	defer server.Close()
+	conn := &guardedConn{Conn: client, owner: owned}
+	if !owned.track(conn) {
+		t.Fatal("live connection was refused")
+	}
+	owned.closeAll()
+	if owned.track(conn) {
+		t.Fatal("dial completed after shutdown was tracked")
+	}
+	if _, err := client.Write([]byte("x")); err == nil {
+		t.Fatal("force close left the raw socket writable")
+	}
+}
