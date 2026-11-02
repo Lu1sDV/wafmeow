@@ -486,7 +486,7 @@ func TestCLIBannerStopsBeforeSharedConsoleResultsAndDiagnostics(t *testing.T) {
 					t.Fatalf("result waited for animation: exit=%d elapsed=%v output=%q", code, time.Since(started), text)
 				}
 				first := strings.Index(text, "DEBUG")
-				if first < 0 || !strings.Contains(text[:first], "\x1b[15A") || strings.Contains(text[first:], "\x1b[15A") || !strings.Contains(text, "SUMMARY") {
+				if first < 0 || !strings.Contains(text[:first], "A\r\x1b[2K") || strings.Contains(text[first:], "A\r\x1b[2K") || !strings.Contains(text, "SUMMARY") {
 					t.Fatalf("shared terminal redraw interleaved with diagnostics/results: %q", text)
 				}
 				if logo, plan := strings.Index(text, "wafmeow"), strings.Index(text, "RUN PLAN"); logo < 0 || plan <= logo {
@@ -527,12 +527,12 @@ func TestCLIBannerEarlyEndAndModeExclusions(t *testing.T) {
 				started := time.Now()
 				code := runContextWithTerminal(context.Background(), args, strings.NewReader(test.input), true, writer, writer, animationTerminal())
 				text, _ := writer.snapshot()
-				redraw := strings.Contains(text, "\x1b[14A") || strings.Contains(text, "\x1b[15A")
+				redraw := strings.Contains(text, "A\r\x1b[2K")
 				if code != test.code || time.Since(started) >= logoInterval || redraw != test.animated {
 					t.Fatalf("early end/exclusion: code=%d elapsed=%v text=%q", code, time.Since(started), text)
 				}
 				for _, marker := range []string{"PARTIAL SUMMARY", "SUMMARY", "ERROR render", "ERROR open"} {
-					if at := strings.Index(text, marker); at >= 0 && strings.Contains(text[at:], "\x1b[13A") {
+					if at := strings.Index(text, marker); at >= 0 && strings.Contains(text[at:], "A\r\x1b[2K") {
 						t.Fatalf("redraw after %s: %q", marker, text)
 					}
 				}
