@@ -10,8 +10,9 @@ import (
 	"github.com/Lu1sDV/wafmeow/v3/pkg/wafmeow"
 )
 
-// The default plan fits one line. Only customized safety controls need extra
-// lines. Never print targets, header values, origin values, or local paths.
+// The default plan is a short two-line configuration summary inside a rounded
+// frame; customized safety controls are listed below it. Never print targets,
+// header values, origin values, or local paths.
 func runPlanText(opts options, config wafmeow.Config) string {
 	if opts.Silent {
 		return ""
