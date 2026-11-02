@@ -391,8 +391,8 @@ func TestScanBannerKeepsPlanBelowAnimatedLogo(t *testing.T) {
 		opts := newOptions(wafmeow.DefaultConfig())
 		plan := runPlanText(opts, wafmeow.DefaultConfig())
 		footerRows := scanBannerPlanRows(terminal, writer, writer, plan)
-		if footerRows != 1 {
-			t.Fatalf("single shared run-plan line should offset redraw by 1: %d", footerRows)
+		if footerRows != strings.Count(plan, "\n") {
+			t.Fatalf("shared run-plan box must offset redraw by its rows: %d", footerRows)
 		}
 		animation, err := startScanBannerWithPlan(context.Background(), writer, opts,
 			aurora.New(aurora.WithColors(false)), terminal, func() { t.Error("unexpected abort") },
@@ -430,7 +430,7 @@ func TestBannerPlanLayoutDisablesUnsafeRedraw(t *testing.T) {
 	plan := runPlanText(opts, config)
 	terminal := animationTerminal()
 	var stdout, stderr bytes.Buffer
-	if rows := scanBannerPlanRows(terminal, &stdout, &stderr, plan); rows != 1 {
+	if rows := scanBannerPlanRows(terminal, &stdout, &stderr, plan); rows != strings.Count(plan, "\n") {
 		t.Fatalf("injected shared terminal missed plan rows: %d", rows)
 	}
 	terminal.sharedOutput = false
