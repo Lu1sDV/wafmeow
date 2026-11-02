@@ -25,7 +25,7 @@ func TestRunPlanExplainsModeParallelismAndTimeouts(t *testing.T) {
 	}{
 		{"deep", false, false, []string{"DEEP MODE", "8 planned HTTP checks", "up to 1/target"}},
 		{"fast", true, false, []string{"FAST MODE", "3 planned HTTP checks", "up to 3/target"}},
-		{"baseline", false, true, []string{"BASELINE MODE", "1 planned HTTP checks", "up to 1/target"}},
+		{"baseline", false, true, []string{"BASELINE MODE", "1 planned HTTP check", "up to 1/target"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			config := wafmeow.DefaultConfig()
