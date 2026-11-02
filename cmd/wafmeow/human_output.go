@@ -35,7 +35,11 @@ func printReadableResult(stdout, stderr io.Writer, result wafmeow.Result, suppre
 		}
 		out.WriteByte('\n')
 	}
-	fmt.Fprintf(&out, "  %s  %s HTTP checks recorded\n", colors.Bold("Checks"), colors.Bold(strconv.Itoa(len(result.Evidence))))
+	checkUnit := "checks"
+	if len(result.Evidence) == 1 {
+		checkUnit = "check"
+	}
+	fmt.Fprintf(&out, "  %s  %s HTTP %s recorded\n", colors.Bold("Checks"), colors.Bold(strconv.Itoa(len(result.Evidence))), checkUnit)
 
 	if result.Generic.Mode != "" || result.Generic.Reason != "" {
 		humanWrapRow(&out, "Review", humanReviewReason(result.Generic))
@@ -161,7 +165,11 @@ func compactScopeRedirects(result wafmeow.Result) ([]string, int) {
 		if dest.status >= 300 && dest.status <= 399 {
 			code = fmt.Sprintf("HTTP %d", dest.status)
 		}
-		lines = append(lines, fmt.Sprintf("%d checks: %s to %s (outside allowed scope)", dest.count, code, dest.origin))
+		unit := "checks"
+		if dest.count == 1 {
+			unit = "check"
+		}
+		lines = append(lines, fmt.Sprintf("%d %s: %s to %s (outside allowed scope)", dest.count, unit, code, dest.origin))
 	}
 	if len(grouped) > 3 {
 		lines = append(lines, fmt.Sprintf("%d additional destinations (see --debug or JSONL)", len(grouped)-3))
@@ -219,7 +227,11 @@ func humanResultExplanation(result wafmeow.Result, scopeRedirects int) string {
 	if result.Outcome.State == wafmeow.Incomplete {
 		var causes []string
 		if scopeRedirects > 0 {
-			causes = append(causes, fmt.Sprintf("%d checks stopped at redirects outside the allowed scope; destination responses were not fetched", scopeRedirects))
+			unit := "checks"
+			if scopeRedirects == 1 {
+				unit = "check"
+			}
+			causes = append(causes, fmt.Sprintf("%d %s stopped at redirects outside the allowed scope; destination responses were not fetched", scopeRedirects, unit))
 		}
 		if truncated > 0 {
 			causes = append(causes, humanTruncationPhrase(truncated))
