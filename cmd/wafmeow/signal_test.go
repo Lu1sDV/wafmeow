@@ -224,7 +224,7 @@ func TestSignalMatchedObservationsAreAttributedPerProduct(t *testing.T) {
 	text := stdout.String()
 	for _, want := range []string{"https://fixture.invalid/  [ WAF MATCH ]", "WAF  Alpha  (Normal HTTP 200, Saved HTTP 302)",
 		"WAF  Beta  (Probe HTTP 403)", "Checks  3 HTTP checks recorded", "Why incomplete", "1 response body was truncated"} {
-		if !strings.Contains(strings.Join(strings.Fields(text), " "), want) {
+		if !strings.Contains(strings.Join(strings.Fields(text), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("human output lost %q in %q", want, text)
 		}
 	}
@@ -265,7 +265,7 @@ func TestHumanCompactSingleMatchKeepsSupportingEvidenceAndUncertainty(t *testing
 		"Checks  5 HTTP checks recorded",
 		"Why incomplete", "3 response bodies were truncated",
 	} {
-		if !strings.Contains(strings.Join(strings.Fields(got), " "), want) {
+		if !strings.Contains(strings.Join(strings.Fields(got), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("compact human result lost %q: %q", want, got)
 		}
 	}
@@ -381,7 +381,7 @@ func TestSignalSuppressedWarningsKeepReviewAndBrowserState(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"[ REVIEW ]", "HTTP diagnostics were recorded", "Browser  failed (text)", "separate from HTTP", "text save failed"} {
-		if !strings.Contains(stdout.String(), want) {
+		if !strings.Contains(strings.Join(strings.Fields(stdout.String()), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("warning suppression lost %q: %q", want, stdout.String())
 		}
 	}
