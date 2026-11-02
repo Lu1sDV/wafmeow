@@ -204,7 +204,7 @@ func TestMachineModesDoNotCreateHumanReportSpool(t *testing.T) {
 		if code != 0 || len(decodeResultLines(t, stdout.String())) != 1 {
 			t.Fatalf("machine scan failed without a temp directory: code=%d stderr=%q", code, stderr.String())
 		}
-		if strings.Contains(stderr.String(), "URL / RESULT / EVIDENCE") {
+		if strings.Contains(stderr.String(), "TARGET / OUTCOME / PRODUCTS / EVIDENCE") {
 			t.Fatalf("machine mode emitted a URL table: %q", stderr.String())
 		}
 		if strings.Contains(strings.Join(args, " "), "--silent") {
@@ -250,10 +250,10 @@ func TestHumanReportSpoolCleanupOnEveryRunExit(t *testing.T) {
 			if err != nil || len(entries) != 0 {
 				t.Fatalf("spool leaked on %s: entries=%v err=%v", name, entries, err)
 			}
-			if name == "success" && !strings.Contains(stderr.String(), "URL / RESULT / EVIDENCE") {
+			if name == "success" && !strings.Contains(stderr.String(), "TARGET / OUTCOME / PRODUCTS / EVIDENCE") {
 				t.Fatal("human run omitted final URL table")
 			}
-			if name == "aborted input" && (!strings.Contains(stderr.String(), "PARTIAL SUMMARY") || !strings.Contains(stderr.String(), "PARTIAL URL / RESULT / EVIDENCE")) {
+			if name == "aborted input" && (!strings.Contains(stderr.String(), "PARTIAL SUMMARY") || !strings.Contains(stderr.String(), "PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE")) {
 				t.Fatalf("aborted run was not clearly partial: %q", stderr.String())
 			}
 		})
@@ -273,7 +273,7 @@ func TestHumanReportCancellationDuringFinalReplay(t *testing.T) {
 			target := "cancel-replay-row"
 			trigger := target
 			if stage == "heading" {
-				trigger = "URL / RESULT / EVIDENCE"
+				trigger = "TARGET / OUTCOME / PRODUCTS / EVIDENCE"
 			}
 			if stage != "last chunk" {
 				target += strings.Repeat("/full-path", 5000) + "/must-not-replay-tail"
