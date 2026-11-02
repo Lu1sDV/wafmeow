@@ -200,6 +200,16 @@ case('positional after delimiter', ['--target=invalid://one', '--', 'invalid://t
 case('flag after delimiter is positional', ['--', '--target=invalid://one'], expected=1)
 case('short valued flag consumes remainder', ['-c2tinvalid://one'], expected=1)
 
+# Quotes are valid literal filename characters when the format extension is
+# recognizable. A trailing quote *after* the extension must not silently
+# switch a JSON/JSONL-looking output into a TXT report.
+for filename in ['report.json"', '"report.json"', 'report.josnl']:
+    case('reject malformed report suffix ' + repr(filename),
+         ['--target=invalid://one', '--output', filename], expected=1,
+         check=lambda d,o,e,n=filename: require(
+             'unsupported --output extension' in e and not (d/n).exists(),
+             f'invalid suffix {n!r} was accepted or created an output file'))
+
 for spelling in ['--target-file', '--input', '-I']:
     case(f'file space form {spelling}', [spelling, 'targets.txt'], targets=['invalid://from-file-one', 'invalid://from-file-two'])
     case(f'file equals form {spelling}', [spelling+'=targets.txt'], targets=['invalid://from-file-one', 'invalid://from-file-two'])
@@ -255,7 +265,7 @@ for value in ['"Accept: text/plain, application/json"', '"X-Tag: say ""hello"""'
 for value in ['NoColon', '', 'X-Tag: first\nSecond: injected', '"X-Tag: unclosed']:
     case('invalid header '+repr(value), ['--target=invalid://one', '-H', value], expected=1)
 
-for filename in ['"report.json', 'report.json"', '"report.json"', 'a\\b.json', '--report.json', './-']:
+for filename in ['"report.json', 'report".json', '"report".json', 'a\\b.json', '--report.json', './-']:
     for form in [['-O', filename], ['-O='+filename], ['-O'+filename]]:
         # A leading-dash path must use an attached/equals value, or ./ prefix.
         if form == ['-O', filename] and filename.startswith('--'):
