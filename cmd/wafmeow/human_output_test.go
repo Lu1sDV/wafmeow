@@ -55,7 +55,7 @@ func TestHumanGroupsRedirectedProbesWithoutDumpingPayloadURLs(t *testing.T) {
 
 func TestHumanReportsCompleteClassificationWithUnknownChannels(t *testing.T) {
 	result := wafmeow.Result{
-		Target: "saved native",
+		Target:  "saved native",
 		Outcome: wafmeow.Outcome{State: wafmeow.Complete},
 		Evidence: []wafmeow.EvidenceSummary{{
 			Role: "Normal", StatusCode: 200,
