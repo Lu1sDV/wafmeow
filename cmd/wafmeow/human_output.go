@@ -44,6 +44,9 @@ func printReadableResult(stdout, stderr io.Writer, result wafmeow.Result, suppre
 	if result.Generic.Mode != "" || result.Generic.Reason != "" {
 		humanWrapRow(&out, "Review", humanReviewReason(result.Generic))
 	}
+	if channels := compactChannelLimitations(result); channels != "" {
+		humanWrapRow(&out, "Channels", channels)
+	}
 	redirects, redirectCount := compactScopeRedirects(result)
 	for _, item := range redirects {
 		humanWrapRow(&out, "Redirect", item)
@@ -177,6 +180,40 @@ func compactScopeRedirects(result wafmeow.Result) ([]string, int) {
 	return lines, total
 }
 
+// Surface only non-complete explicit channels. These limitations matter even
+// when catalogue-relative classification is complete. Group identical channel
+// states to avoid 8 repeated lines for the same unavailable response.
+func compactChannelLimitations(result wafmeow.Result) string {
+	var limitations []string
+	seen := make(map[string]bool)
+	for _, evidence := range result.Evidence {
+		availability := evidence.Availability
+		if availability == nil {
+			continue
+		}
+		for _, channel := range []struct{ name string; state wafmeow.ChannelState }{
+			{"status", availability.Status},
+			{"headers", availability.Headers},
+			{"reason", availability.Reason},
+			{"body", availability.Body},
+		} {
+			if channel.state == wafmeow.ChannelComplete {
+				continue
+			}
+			state := string(channel.state)
+			if channel.state == wafmeow.ChannelIncomplete {
+				state = "partial"
+			}
+			description := channel.name + " " + terminalText(state)
+			if !seen[description] {
+				seen[description] = true
+				limitations = append(limitations, description)
+			}
+		}
+	}
+	return strings.Join(limitations, "; ")
+}
+
 // A complete classification can still contain truncated bodies or diagnostics.
 // Only explain incompleteness when the classifier actually reports it; matches
 // can coexist with incomplete evaluation of other products.
@@ -237,10 +274,18 @@ func humanResultExplanation(result wafmeow.Result, scopeRedirects int) string {
 			causes = append(causes, humanTruncationPhrase(truncated))
 		}
 		if timeoutOrFailure > 0 {
-			causes = append(causes, fmt.Sprintf("%d HTTP diagnostics were recorded", timeoutOrFailure))
+			if timeoutOrFailure == 1 {
+				causes = append(causes, "1 HTTP diagnostic was recorded")
+			} else {
+				causes = append(causes, fmt.Sprintf("%d HTTP diagnostics were recorded", timeoutOrFailure))
+			}
 		}
 		if unknownChannels > 0 {
-			causes = append(causes, fmt.Sprintf("%d observations have unavailable, partial or unverified response channels", unknownChannels))
+			if unknownChannels == 1 {
+				causes = append(causes, "1 observation has partial, unavailable or unverified response channels")
+			} else {
+				causes = append(causes, fmt.Sprintf("%d observations have partial, unavailable or unverified response channels", unknownChannels))
+			}
 		}
 		if len(causes) == 0 {
 			if len(result.Evidence) == 0 {
@@ -254,6 +299,9 @@ func humanResultExplanation(result wafmeow.Result, scopeRedirects int) string {
 	}
 	if truncated > 0 {
 		return humanTruncationPhrase(truncated) + ". The classification resolved, but not all HTTP content was retained."
+	}
+	if unknownChannels > 0 {
+		return "Classification resolved against the available evidence, but some HTTP channels are partial, unavailable or unverified."
 	}
 	if humanOutcome(result) == "REVIEW" && len(result.Outcome.Diagnostics) > 0 {
 		return "HTTP diagnostics were recorded. Classification may be complete despite individual acquisition problems."
