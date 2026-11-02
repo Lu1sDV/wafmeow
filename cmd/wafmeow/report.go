@@ -69,7 +69,11 @@ func (report *humanReportSpool) add(result wafmeow.Result) error {
 		report.explicitAvailability = true
 		state = "classification " + state + "; " + channelSummary(result)
 	}
-	row := fmt.Sprintf("%s | %s | %s | %s\n", humanOutcome(result), products.String(), state, terminalText(result.Target))
+	target := terminalText(result.Target)
+	if report.colors != nil {
+		target = fmt.Sprint(report.colors.Bold(target))
+	}
+	row := fmt.Sprintf("%s | %s | %s | %s\n", target, humanOutcome(result), products.String(), state)
 	n, err := io.WriteString(report.file, row)
 	if err == nil && n != len(row) {
 		err = io.ErrShortWrite
@@ -87,19 +91,19 @@ func (report *humanReportSpool) replay(ctx context.Context, writer io.Writer, fi
 		return nil
 	}
 	writer = reportReplayWriter{ctx: ctx, writer: writer}
-	label := "URL / RESULT / EVIDENCE"
+	label := "TARGET / OUTCOME / PRODUCTS / EVIDENCE"
 	if !finished {
-		label = "PARTIAL URL / RESULT / EVIDENCE (completed rows only)"
+		label = "PARTIAL TARGET / OUTCOME / PRODUCTS / EVIDENCE (completed rows only)"
 	}
 	stateLabel := "HTTP EVIDENCE"
 	if report.explicitAvailability {
-		label = "URL / RESULT / CLASSIFICATION / CHANNELS"
+		label = "TARGET / OUTCOME / PRODUCTS / CLASSIFICATION / CHANNELS"
 		if !finished {
 			label = "PARTIAL " + label + " (completed rows only)"
 		}
 		stateLabel = "HTTP CLASSIFICATION / CHANNELS"
 	}
-	if _, err := fmt.Fprintf(writer, "\n%s\nOUTCOME | PRODUCTS (SUPPORTING OBSERVATIONS) | %s | FULL URL\n--------|-----------------------------------|---------------|---------\n", label, stateLabel); err != nil {
+	if _, err := fmt.Fprintf(writer, "\n%s\nFULL URL | OUTCOME | PRODUCTS (SUPPORTING OBSERVATIONS) | %s\n---------|---------|-----------------------------------|---------------\n", label, stateLabel); err != nil {
 		return fmt.Errorf("write human report table: %w", err)
 	}
 	// Fixed separators avoid tabwriter's whole-table buffering on large scans.
