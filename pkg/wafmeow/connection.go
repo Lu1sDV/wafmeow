@@ -73,7 +73,7 @@ func newOwnedConnections() *ownedConnections {
 }
 
 // track reports whether the connection may still be used. Once shutdown has
-// force-closed the set, a late dial must not become usable again.
+// sealed the set, a late dial must not become usable again.
 func (o *ownedConnections) track(conn *guardedConn) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -109,9 +109,9 @@ func (o *ownedConnections) closeAll() {
 // ownedTransportCloseGrace bounds graceful shutdown of run-owned connections.
 const ownedTransportCloseGrace = 250 * time.Millisecond
 
-// closeOwnedTransport attempts a graceful close, then force-closes the raw
-// sockets when the grace period or caller cancellation expires. The transport
-// call is joined, so no cleanup work or connection outlives Run.
+// closeOwnedTransport attempts a graceful close, then force-closes any remaining
+// tracked sockets and refuses late dials on every exit path. The grace period
+// bounds the wait before forcing closure; the CloseIdleConnections call is joined.
 func closeOwnedTransport(ctx context.Context, transport *http.Transport, owned *ownedConnections) {
 	done := make(chan struct{})
 	go func() {
@@ -122,10 +122,12 @@ func closeOwnedTransport(ctx context.Context, transport *http.Transport, owned *
 	defer timer.Stop()
 	select {
 	case <-done:
-		return
 	case <-timer.C:
 	case <-ctx.Done():
 	}
+	// A completed idle-pool close does not imply that every socket is closed:
+	// dials and transport-initiated closes can still be in progress. Seal the
+	// tracker even on the fast path, closing stragglers and rejecting late dials.
 	if owned != nil {
 		owned.closeAll()
 	}
