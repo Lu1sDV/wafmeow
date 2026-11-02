@@ -155,7 +155,7 @@ func scanBannerPlanRows(terminal bannerTerminal, stdout, stderr io.Writer, plan 
 		return 0
 	}
 	for _, line := range strings.Split(strings.TrimSuffix(plan, "\n"), "\n") {
-		if terminal.columns <= 0 || len(line) >= terminal.columns {
+		if terminal.columns <= 0 || uniseg.StringWidth(line) >= terminal.columns {
 			return -1
 		}
 	}
