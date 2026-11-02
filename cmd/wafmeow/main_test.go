@@ -319,9 +319,11 @@ func TestConsoleBlockedRedirectDestination(t *testing.T) {
 		http.Redirect(w, r, location, http.StatusFound)
 	}))
 	defer source.Close()
-	code, _, warning := runCLI(t, nil, "--target", source.URL, "--baseline", "--no-colors")
-	if code != 0 || !diagnosticRow(warning, "Normal", "Got Redirect 302: "+location) || strings.Contains(warning, "\x1b") {
-		t.Fatalf("missing plain redirect destination: exit=%d stderr=%q", code, warning)
+	code, stdout, stderr := runCLI(t, nil, "--target", source.URL, "--baseline", "--no-colors")
+	if code != 0 || !strings.Contains(stdout, "Redirect") || !strings.Contains(stdout, destination.URL) ||
+		!strings.Contains(stdout, "Why incomplete") || strings.Contains(stdout, "/blocked?from=fixture") ||
+		strings.Contains(stderr, "/blocked?from=fixture") {
+		t.Fatalf("redirect was not summarized by destination origin: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	if destinationHits.Load() != 0 {
 		t.Fatal("blocked redirect was followed")
@@ -333,12 +335,13 @@ func TestConsoleBlockedRedirectDestination(t *testing.T) {
 		}},
 		Evidence: []wafmeow.EvidenceSummary{{Role: "Normal", StatusCode: http.StatusFound, BlockedRedirectURL: location + "\x1b\nFORGED"}},
 	}
-	var stdout, stderr bytes.Buffer
-	if err := printResult(&stdout, &stderr, result, false, aurora.New(aurora.WithColors(true)), aurora.New(aurora.WithColors(false))); err != nil {
+	var output, warnings bytes.Buffer
+	if err := printResult(&output, &warnings, result, false, aurora.New(aurora.WithColors(false)), aurora.New(aurora.WithColors(false))); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr.String(), location+`\x1b\nFORGED`) || strings.Count(stderr.String(), "\n") != 3 {
-		t.Fatalf("redirect destination was lost or unsafe: %q", stderr.String())
+	if strings.Contains(output.String(), "FORGED") || strings.Contains(output.String(), "from=fixture") ||
+		strings.Contains(output.String(), "\x1b") || strings.Contains(warnings.String(), "FORGED") {
+		t.Fatalf("compact redirect leaked unsafe destination details: stdout=%q stderr=%q", output.String(), warnings.String())
 	}
 }
 
