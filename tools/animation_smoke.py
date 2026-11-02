@@ -353,7 +353,7 @@ def run_suite(binary, output):
             process.finish()
             out = plain(process.streams['stdout'])
             require(url + '  [ WAF MATCH ]' in out, 'matched target missing')
-            require('WAF  Fixture WAF  (Normal HTTP 200)' in out,
+            require('WAF: Fixture WAF  (Normal HTTP 200)' in out,
                     'matched fingerprint is not attributed to its supporting check')
             require('Checks  1 HTTP check recorded' in out, 'HTTP check count missing')
             require('Note  1 response body was truncated' in out,
