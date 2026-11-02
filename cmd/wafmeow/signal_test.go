@@ -198,7 +198,7 @@ func TestHumanMatchedProductGreenWhileOutcomeRemainsRed(t *testing.T) {
 	text := out.String()
 	outcome := fmt.Sprint(au.Bold(au.Red("[ WAF MATCH ]")))
 	name := fmt.Sprint(au.Bold(au.Green("Cloudflare (Cloudflare Inc.)")))
-	if !strings.HasPrefix(text, fmt.Sprint(au.Bold(result.Target))+"  "+outcome+"\n") || !strings.Contains(text, fmt.Sprint(au.Bold("WAF"))+"  "+name) {
+	if !strings.HasPrefix(text, fmt.Sprint(au.Bold(result.Target))+"  "+outcome+"\n") || !strings.Contains(text, fmt.Sprint(au.Bold("WAF:"))+" "+name) {
 		t.Fatalf("WAF outcome should remain red while the detected name is green: %q", text)
 	}
 	if strings.Contains(text, fmt.Sprint(au.Bold(au.Red("Cloudflare (Cloudflare Inc.)")))) {
@@ -222,8 +222,8 @@ func TestSignalMatchedObservationsAreAttributedPerProduct(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := stdout.String()
-	for _, want := range []string{"https://fixture.invalid/  [ WAF MATCH ]", "WAF  Alpha  (Normal HTTP 200, Saved HTTP 302)",
-		"WAF  Beta  (Probe HTTP 403)", "Checks  3 HTTP checks recorded", "Why incomplete", "1 response body was truncated"} {
+	for _, want := range []string{"https://fixture.invalid/  [ WAF MATCH ]", "WAF: Alpha  (Normal HTTP 200, Saved HTTP 302)",
+		"WAF: Beta  (Probe HTTP 403)", "Checks  3 HTTP checks recorded", "Why incomplete", "1 response body was truncated"} {
 		if !strings.Contains(strings.Join(strings.Fields(text), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("human output lost %q in %q", want, text)
 		}
@@ -260,7 +260,7 @@ func TestHumanCompactSingleMatchKeepsSupportingEvidenceAndUncertainty(t *testing
 	got := out.String()
 	for _, want := range []string{
 		"https://www.cloudflare.com  [ WAF MATCH ]",
-		"WAF  Cloudflare (Cloudflare Inc.)  (Normal HTTP 200)",
+		"WAF: Cloudflare (Cloudflare Inc.)  (Normal HTTP 200)",
 		"Review  HTTP 200 → 403 on XssAttack (unusual response)",
 		"Checks  5 HTTP checks recorded",
 		"Why incomplete", "3 response bodies were truncated",
