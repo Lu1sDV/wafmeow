@@ -222,7 +222,7 @@ func humanResultExplanation(result wafmeow.Result, scopeRedirects int) string {
 			causes = append(causes, fmt.Sprintf("%d checks stopped at redirects outside the allowed scope; destination responses were not fetched", scopeRedirects))
 		}
 		if truncated > 0 {
-			causes = append(causes, fmt.Sprintf("%d response bodies were truncated", truncated))
+			causes = append(causes, humanTruncationPhrase(truncated))
 		}
 		if timeoutOrFailure > 0 {
 			causes = append(causes, fmt.Sprintf("%d HTTP diagnostics were recorded", timeoutOrFailure))
@@ -241,12 +241,19 @@ func humanResultExplanation(result wafmeow.Result, scopeRedirects int) string {
 			". A missing match here is not evidence that no WAF is present."
 	}
 	if truncated > 0 {
-		return fmt.Sprintf("%d response bodies were truncated. The named classification resolved, but not all HTTP content was retained.", truncated)
+		return humanTruncationPhrase(truncated) + ". The classification resolved, but not all HTTP content was retained."
 	}
 	if humanOutcome(result) == "REVIEW" && len(result.Outcome.Diagnostics) > 0 {
 		return "HTTP diagnostics were recorded. Classification may be complete despite individual acquisition problems."
 	}
 	return ""
+}
+
+func humanTruncationPhrase(count int) string {
+	if count == 1 {
+		return "1 response body was truncated"
+	}
+	return fmt.Sprintf("%d response bodies were truncated", count)
 }
 
 // Wrap only explanatory prose, not arbitrary URL query values. Keep the label
