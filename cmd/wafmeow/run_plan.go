@@ -109,19 +109,36 @@ func runPlanBox(heading, limits string, details []string) string {
 	plan.WriteString("╮\n")
 	lines := []string{heading, limits}
 	if len(details) != 0 {
-		lines = append(lines, "Settings: "+strings.Join(details, " | "))
+		// Keep every complete setting together. A wrapping word in the middle
+		// of "origin allowlist on" or "JSONL report" obscures its meaning.
+		current := "Settings: "
+		for _, detail := range details {
+			separator := ""
+			if strings.TrimSpace(current) != "Settings:" && strings.TrimSpace(current) != "" {
+				separator = " | "
+			}
+			if len([]rune(current))+len([]rune(separator))+len([]rune(detail)) > interior &&
+				strings.TrimSpace(current) != "Settings:" {
+				lines = append(lines, strings.TrimRight(current, " "))
+				current, separator = "          ", ""
+			}
+			current += separator + detail
+		}
+		lines = append(lines, current)
 	}
 	for _, raw := range lines {
-		line := ""
+		indent := strings.Repeat(" ", len(raw)-len(strings.TrimLeft(raw, " ")))
+		line := indent
 		for _, word := range strings.Fields(raw) {
-			if line != "" && len([]rune(line))+1+len([]rune(word)) > interior {
+			separator := ""
+			if strings.TrimSpace(line) != "" {
+				separator = " "
+			}
+			if strings.TrimSpace(line) != "" && len([]rune(line))+len([]rune(separator))+len([]rune(word)) > interior {
 				fmt.Fprintf(&plan, "│ %-*s │\n", interior, line)
-				line = ""
+				line, separator = indent, ""
 			}
-			if line != "" {
-				line += " "
-			}
-			line += word
+			line += separator + word
 		}
 		fmt.Fprintf(&plan, "│ %-*s │\n", interior, line)
 	}
